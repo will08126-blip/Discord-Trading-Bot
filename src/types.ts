@@ -67,9 +67,8 @@ export interface ActivePosition {
   id: string;
   signal: StrategySignal;
   entryPrice: number;
-  suggestedSize: number;       // USDT notional
   suggestedLeverage: number;
-  dollarRisk: number;
+  riskPct: number;             // % of capital to risk (confidence-based)
   confirmedAt: number;
   messageId: string;           // Discord message ID for edits
   channelId: string;

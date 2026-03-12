@@ -43,7 +43,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         name: '⚙️ Settings',
         value: [
           `Min score: ${config.trading.minScoreThreshold}`,
-          `Risk/trade: $${config.trading.riskPerTrade}`,
+          `Risk: ELITE 2% | STRONG 1.5% | MEDIUM 1% of capital`,
           `Max lev (scalp): ${config.trading.maxLeverageScalp}x`,
           `Max lev (swing): ${config.trading.maxLeverageSwing}x`,
           `Scan interval: ${config.engine.scanIntervalMinutes} min`,

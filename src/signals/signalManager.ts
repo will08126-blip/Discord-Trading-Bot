@@ -52,9 +52,8 @@ export function confirmEntry(
     id: signalId,
     signal,
     entryPrice,
-    suggestedSize: risk.suggestedSizeUsdt,
     suggestedLeverage: risk.suggestedLeverage,
-    dollarRisk: risk.dollarRisk,
+    riskPct: risk.riskPct,
     confirmedAt: Date.now(),
     messageId,
     channelId,
@@ -104,8 +103,11 @@ function closePosition(
     ? (exitPrice - position.entryPrice) / position.entryPrice
     : (position.entryPrice - exitPrice) / position.entryPrice;
 
-  // Estimated dollar P&L based on the suggested notional size
-  const pnlDollar = pnlPct * position.suggestedSize;
+  // P&L expressed as R-multiples (how many R gained/lost) since we have no fixed capital
+  // pnlDollar is stored as R-multiple × 100 for display (e.g. 1.5R = 150)
+  const stopDist = Math.abs(position.entryPrice - position.signal.stopLoss) / position.entryPrice;
+  const rMultiple = stopDist > 0 ? pnlPct / stopDist : 0;
+  const pnlDollar = rMultiple; // stored as R-multiple; display layer formats it as "1.5R"
 
   const trade: ClosedTrade = {
     ...position,

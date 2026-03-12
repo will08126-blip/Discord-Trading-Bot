@@ -5,39 +5,38 @@ export interface RiskParameters {
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
-  stopDistancePct: number;
+  stopDistancePct: number;      // % distance from entry to SL
   rewardRiskRatio: number;
   suggestedLeverage: number;
-  suggestedSizeUsdt: number;  // notional position size in USDT
-  dollarRisk: number;
-  dollarReward: number;
-  contractQty: number;        // approx contracts (notional / entry price)
+  riskPct: number;              // % of your capital to risk (confidence-based)
   tradeType: TradeType;
+  // Reference table: estimated dollar risk at common capital sizes
+  referenceTable: { capital: number; riskDollars: number; positionSize: number }[];
 }
 
 /**
- * Leverage cap: scalp trades (tight SL on 5m/1m) justify high leverage.
- * Swing trades (wide SL on 15m/4h) use lower leverage.
+ * Confidence-based risk percentages — no fixed capital required.
+ * User scales these to whatever they're working with that week.
+ *
+ * Scalp trades get slightly higher allocation because the leverage
+ * is higher and stops are tighter, so the % risk stays manageable.
  */
+const RISK_PCT: Record<string, Record<ScoreTier, number>> = {
+  scalp: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
+  swing: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
+};
+
+const REFERENCE_CAPITALS = [500, 1000, 2500, 5000, 10000];
+
 function leverageCap(tier: ScoreTier, tradeType: TradeType): number {
   const tiers = config.leverageTiers[tradeType === 'SCALP' ? 'scalp' : 'swing'];
   const byTier = tiers[tier] ?? 5;
-  const hardCap =
-    tradeType === 'SCALP'
-      ? config.trading.maxLeverageScalp
-      : config.trading.maxLeverageSwing;
+  const hardCap = tradeType === 'SCALP'
+    ? config.trading.maxLeverageScalp
+    : config.trading.maxLeverageSwing;
   return Math.min(byTier, hardCap);
 }
 
-/**
- * Classify a signal as SCALP or SWING based on SL distance relative to price.
- *
- * Tight SL (< 0.5% from entry) → SCALP
- * Wide SL (≥ 0.5%)             → SWING
- *
- * This is the same classification set by each strategy, but we re-check here
- * for defensive validation.
- */
 export function classifyTradeType(signal: StrategySignal): TradeType {
   const entry = (signal.entryZone[0] + signal.entryZone[1]) / 2;
   const stopPct = Math.abs(entry - signal.stopLoss) / entry;
@@ -53,24 +52,27 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
   const rewardRiskRatio = stopDistance > 0 ? rewardDistance / stopDistance : 0;
 
   const tradeType = signal.tradeType ?? classifyTradeType(signal);
+  const typeKey = tradeType === 'SCALP' ? 'scalp' : 'swing';
 
-  const dollarRisk = config.trading.riskPerTrade;
+  // Confidence-based risk %
+  const riskPct = RISK_PCT[typeKey][signal.tier] ?? 1.0;
 
-  // Position size: if price moves stopDistancePct against us → lose dollarRisk
-  const suggestedSizeUsdt =
-    stopDistancePct > 0 ? dollarRisk / stopDistancePct : 0;
-
-  // Required leverage
-  const requiredLeverage =
-    config.trading.accountCapital > 0
-      ? suggestedSizeUsdt / config.trading.accountCapital
-      : 1;
-
+  // Leverage: based on how much notional you need vs capital to achieve riskPct
+  // At riskPct% risk with stopDistancePct% stop:
+  //   positionSize = capital * riskPct% / stopDistancePct%
+  //   leverage     = positionSize / capital = riskPct / stopDistancePct
+  const impliedLeverage = stopDistancePct > 0 ? riskPct / 100 / stopDistancePct : 1;
   const maxLev = leverageCap(signal.tier, tradeType);
-  const suggestedLeverage = Math.max(1, Math.min(maxLev, Math.ceil(requiredLeverage)));
+  const suggestedLeverage = Math.max(1, Math.min(maxLev, Math.ceil(impliedLeverage)));
 
-  const dollarReward = dollarRisk * rewardRiskRatio;
-  const contractQty = entryPrice > 0 ? suggestedSizeUsdt / entryPrice : 0;
+  // Reference table: show estimated risk dollars and position size at common capitals
+  const referenceTable = REFERENCE_CAPITALS.map((capital) => {
+    const riskDollars = Math.round(capital * (riskPct / 100));
+    const positionSize = stopDistancePct > 0
+      ? Math.round(riskDollars / stopDistancePct)
+      : 0;
+    return { capital, riskDollars, positionSize };
+  });
 
   return {
     entryPrice,
@@ -79,11 +81,9 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
     stopDistancePct,
     rewardRiskRatio,
     suggestedLeverage,
-    suggestedSizeUsdt: Math.round(suggestedSizeUsdt * 100) / 100,
-    dollarRisk: Math.round(dollarRisk * 100) / 100,
-    dollarReward: Math.round(dollarReward * 100) / 100,
-    contractQty: Math.round(contractQty * 10000) / 10000,
+    riskPct,
     tradeType,
+    referenceTable,
   };
 }
 

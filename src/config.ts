@@ -30,8 +30,7 @@ export const config = {
 
   trading: {
     assets: ['BTC/USDT:USDT', 'ETH/USDT:USDT'] as const,
-    accountCapital: Number(optionalEnv('ACCOUNT_CAPITAL', '10000')),
-    riskPerTrade: Number(optionalEnv('RISK_PER_TRADE', '50')),
+    // No fixed capital — sizing is confidence-based (% of whatever you allocate)
     maxOpenPositions: Number(optionalEnv('MAX_OPEN_POSITIONS', '3')),
     maxDailyLoss: Number(optionalEnv('MAX_DAILY_LOSS', '150')),
     minScoreThreshold: Number(optionalEnv('MIN_SCORE_THRESHOLD', '60')),

@@ -39,9 +39,15 @@ export function buildSignalEmbed(signal: StrategySignal) {
           `📍 **Entry Zone:**  ${formatPrice(signal.entryZone[0], asset)} – ${formatPrice(signal.entryZone[1], asset)}`,
           `🛑 **Stop Loss:**  ${formatPrice(signal.stopLoss, asset)}  (${pct(signal.stopLoss, entry)})`,
           `🎯 **Take Profit:** ${formatPrice(signal.takeProfit, asset)}  (${pct(signal.takeProfit, entry)})`,
-          `📐 **R:R:**  ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x`,
-          `💰 **Size:** ~$${risk.suggestedSizeUsdt.toFixed(0)} notional  (~$${risk.dollarRisk.toFixed(0)} at risk)`,
+          `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x  |  **SL dist:** ${(risk.stopDistancePct * 100).toFixed(2)}%`,
         ].join('\n'),
+        inline: false,
+      },
+      {
+        name: `💰 Suggested Risk: ${risk.riskPct}% of your capital`,
+        value: risk.referenceTable
+          .map((r) => `$${r.capital.toLocaleString()} → risk **$${r.riskDollars}** (pos ~$${r.positionSize.toLocaleString()})`)
+          .join('\n'),
         inline: false,
       },
       {
@@ -114,7 +120,7 @@ export function buildPositionEmbed(position: ActivePosition, currentPrice?: numb
         }`,
         priceLine,
         pnlLine,
-        `📐 **Leverage:** ${position.suggestedLeverage}x  |  **Size:** ~$${position.suggestedSize.toFixed(0)}`,
+        `📐 **Leverage:** ${position.suggestedLeverage}x  |  **Risk:** ${position.riskPct}% of capital`,
         `⚡ **Type:** ${position.signal.tradeType}  |  **Strategy:** ${position.signal.strategy}`,
       ].filter(Boolean).join('\n'),
       inline: false,
@@ -204,8 +210,9 @@ export function buildSLTPUpdateEmbed(
 
 export function buildClosedTradeEmbed(trade: ClosedTrade) {
   const asset = trade.signal.asset.replace('/USDT:USDT', '');
-  const isWin = trade.pnlDollar > 0;
-  const pnlStr = `${isWin ? '+' : ''}${(trade.pnlPct * 100).toFixed(2)}%  ($${isWin ? '+' : ''}${trade.pnlDollar.toFixed(2)})`;
+  const isWin = trade.pnlDollar > 0; // pnlDollar stores R-multiple
+  const rMultiple = trade.pnlDollar;
+  const pnlStr = `${(trade.pnlPct * 100).toFixed(2)}%  (${rMultiple >= 0 ? '+' : ''}${rMultiple.toFixed(2)}R)`;
 
   const embed = new EmbedBuilder()
     .setColor(isWin ? 0x00ff87 : 0xff4444)
