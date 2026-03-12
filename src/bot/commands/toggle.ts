@@ -19,9 +19,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const state = interaction.options.getString('state', true);
   const enabled = state === 'on';
   toggleBot(enabled);
-  await interaction.reply(
-    enabled
+  await interaction.reply({
+    content: enabled
       ? '✅ Bot **enabled** — scanning for setups every 5 minutes.'
-      : '⛔ Bot **disabled** — no new signals will be posted until you re-enable.'
-  );
+      : '⛔ Bot **disabled** — no new signals will be posted until you re-enable.',
+    ephemeral: false,
+  });
 }

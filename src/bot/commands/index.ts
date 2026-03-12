@@ -8,6 +8,10 @@ import * as closeCmd from './close';
 import * as performanceCmd from './performance';
 import * as toggleCmd from './toggle';
 import * as reportCmd from './report';
+import * as scanCmd from './scan';
+import * as historyCmd from './history';
+import * as helpCmd from './help';
+import * as configCmd from './config';
 
 export interface Command {
   data: { toJSON: () => unknown; name: string };
@@ -21,6 +25,10 @@ export const commands = new Map<string, Command>([
   ['performance', performanceCmd],
   ['toggle', toggleCmd],
   ['report', reportCmd],
+  ['scan', scanCmd],
+  ['history', historyCmd],
+  ['help', helpCmd],
+  ['config', configCmd],
 ]);
 
 /** Deploy (register) all slash commands with Discord's API */

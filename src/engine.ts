@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import type { TextChannel } from 'discord.js';
 import { discordClient } from './bot/client';
 import { fetchAllAssets, fetchOHLCV } from './data/marketData';
-import { detectRegime, isTradeableRegime } from './regime/regimeDetector';
+import { detectRegime, isTradeableRegime, setLastRegime } from './regime/regimeDetector';
 import { TrendPullbackStrategy } from './strategies/trendPullback';
 import { BreakoutRetestStrategy } from './strategies/breakoutRetest';
 import { LiquiditySweepStrategy } from './strategies/liquiditySweep';
@@ -115,11 +115,11 @@ async function monitorActivePositions() {
 
 // ─── Main scan loop ───────────────────────────────────────────────────────────
 
-export async function runScanCycle() {
+export async function runScanCycle(): Promise<{ signalCount: number; skipped: boolean; reason?: string }> {
   const guard = checkHardControls();
   if (!guard.allowed) {
     logger.info(`Scan skipped: ${guard.reason}`);
-    return;
+    return { signalCount: 0, skipped: true, reason: guard.reason };
   }
 
   logger.info('Starting scan cycle...');
@@ -134,7 +134,7 @@ export async function runScanCycle() {
       allData = await fetchAllAssets();
     } catch (err) {
       logger.error('Data fetch failed:', err);
-      return;
+      return { signalCount: 0, skipped: false };
     }
 
     const newSignals: any[] = [];
@@ -142,6 +142,7 @@ export async function runScanCycle() {
     for (const mtfData of allData) {
       const asset = mtfData.asset;
       const regime = detectRegime(asset, mtfData['4h']);
+      setLastRegime(asset, regime);
 
       if (!isTradeableRegime(regime.regime)) {
         logger.info(`${asset}: ${regime.regime} — skipping`);
@@ -185,8 +186,11 @@ export async function runScanCycle() {
     for (const signal of deduped) {
       await postSignal(signal);
     }
+
+    return { signalCount: deduped.length, skipped: false };
   } catch (err) {
     logger.error('Scan cycle error:', err);
+    return { signalCount: 0, skipped: false };
   }
 }
 
