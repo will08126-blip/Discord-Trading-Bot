@@ -2,7 +2,7 @@ import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from '
 import { loadState } from '../../adaptation/adaptation';
 import { getAllActivePositions, getAllPendingSignals } from '../../signals/signalManager';
 import { dailyPnl } from '../../performance/tracker';
-import { regimeLabel } from '../../regime/regimeDetector';
+import { regimeLabel, getLastRegimes } from '../../regime/regimeDetector';
 import { config } from '../../config';
 
 export const data = new SlashCommandBuilder()
@@ -14,16 +14,30 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   const pending = getAllPendingSignals();
   const active = getAllActivePositions();
   const pnlToday = dailyPnl();
-  const pnlStr = pnlToday >= 0 ? `+$${pnlToday.toFixed(2)}` : `-$${Math.abs(pnlToday).toFixed(2)}`;
+  const pnlStr = pnlToday >= 0 ? `+${pnlToday.toFixed(2)}R` : `${pnlToday.toFixed(2)}R`;
 
   const stratWeights = Object.entries(state.strategyWeights)
     .map(([name, w]) => `  ${name}: ${(w * 100).toFixed(0)}%`)
     .join('\n');
 
+  // Build regime summary from cache
+  const regimes = getLastRegimes();
+  const regimeLines =
+    regimes.size > 0
+      ? [...regimes.entries()]
+          .map(([asset, r]) => `**${asset}:** ${regimeLabel(r.regime)} (ADX=${r.adx.toFixed(1)})`)
+          .join('\n')
+      : '_No data yet — waiting for first scan_';
+
   const embed = new EmbedBuilder()
     .setColor(state.enabled ? 0x00ff87 : 0xff4444)
     .setTitle(`🤖 Bot Status — ${state.enabled ? '🟢 Active' : '🔴 Disabled'}`)
     .addFields(
+      {
+        name: '📡 Market Regimes',
+        value: regimeLines,
+        inline: false,
+      },
       {
         name: '📅 Today',
         value: `P&L: **${pnlStr}**  |  Limit: $${config.trading.maxDailyLoss}`,

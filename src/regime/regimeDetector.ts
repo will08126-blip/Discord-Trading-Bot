@@ -1,6 +1,18 @@
 import type { OHLCV, Asset, Regime, RegimeResult } from '../types';
 import { ema, atr, atrAverage, adx, bollinger, bollingerWidthMin } from '../indicators/indicators';
 
+// ─── Regime cache (updated on every scan cycle) ───────────────────────────────
+
+const lastRegimes = new Map<Asset, RegimeResult>();
+
+export function setLastRegime(asset: Asset, result: RegimeResult): void {
+  lastRegimes.set(asset, result);
+}
+
+export function getLastRegimes(): Map<Asset, RegimeResult> {
+  return lastRegimes;
+}
+
 const ADX_TREND_THRESHOLD = 25;
 const ADX_RANGE_THRESHOLD = 20;
 const ATR_EXPANSION_RATIO = 1.5;
