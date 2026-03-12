@@ -21,10 +21,7 @@ export const config = {
     summaryChannelId: requireEnv('SUMMARY_CHANNEL_ID'),
   },
 
-  binance: {
-    apiKey: optionalEnv('BINANCE_API_KEY', ''),
-    secret: optionalEnv('BINANCE_SECRET', ''),
-  },
+  // Binance public API — no key required for OHLCV market data
 
   anthropic: {
     apiKey: optionalEnv('ANTHROPIC_API_KEY', ''),
