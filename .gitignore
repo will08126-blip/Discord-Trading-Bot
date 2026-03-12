@@ -4,5 +4,5 @@ dist/
 *.log
 data/trades.json
 data/state.json
-data/
+/data/
 logs/
