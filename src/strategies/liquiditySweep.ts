@@ -13,7 +13,7 @@ import {
   isVolumeSpike,
   ema,
 } from '../indicators/indicators';
-import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier } from '../types';
+import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 /**
  * Liquidity Sweep Reversal Strategy
@@ -99,7 +99,7 @@ export class LiquiditySweepStrategy extends BaseStrategy {
     avgAtr5m: number,
     isBullReversal: boolean,
     regime: Regime
-  ): Omit<StrategySignal, 'asset'> | null {
+  ): StrategySignal | null {
     const n15 = candles15m.length - 1;
 
     for (const swingLevel of swingPrices) {
@@ -204,11 +204,15 @@ export class LiquiditySweepStrategy extends BaseStrategy {
 
         if (tier === 'NO_TRADE') continue;
 
+        const stopPct = Math.abs(entryZone[0] - stopLoss) / entryZone[0];
+        const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+
         return {
           id: uuidv4(),
           strategy: this.name,
           asset: 'BTC/USDT:USDT', // placeholder — overwritten by caller
           direction: isBullReversal ? 'LONG' : 'SHORT',
+          tradeType,
           entryZone,
           stopLoss,
           takeProfit,

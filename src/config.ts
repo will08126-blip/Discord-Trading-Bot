@@ -37,9 +37,10 @@ export const config = {
     riskPerTrade: Number(optionalEnv('RISK_PER_TRADE', '50')),
     maxOpenPositions: Number(optionalEnv('MAX_OPEN_POSITIONS', '3')),
     maxDailyLoss: Number(optionalEnv('MAX_DAILY_LOSS', '150')),
-    maxDrawdownPct: Number(optionalEnv('MAX_DRAWDOWN_PCT', '10')),
     minScoreThreshold: Number(optionalEnv('MIN_SCORE_THRESHOLD', '60')),
-    maxLeverage: Number(optionalEnv('MAX_LEVERAGE', '20')),
+    // Hard leverage caps — scalp trades can go higher because SL is tight
+    maxLeverageScalp: Number(optionalEnv('MAX_LEVERAGE_SCALP', '50')),
+    maxLeverageSwing: Number(optionalEnv('MAX_LEVERAGE_SWING', '20')),
   },
 
   engine: {
@@ -63,13 +64,13 @@ export const config = {
     logsDir: path.join(process.cwd(), 'logs'),
   },
 
-  // Leverage tiers by score tier
+  // Leverage tiers: [SCALP leverage, SWING leverage] by score tier
+  // Scalp trades: tight SL on 5m/1m — high leverage is justified
+  // Swing trades: wide SL on 15m/4h — moderate leverage to manage risk
   leverageTiers: {
-    ELITE: 20,
-    STRONG: 10,
-    MEDIUM: 5,
-    NO_TRADE: 0,
-  } as Record<string, number>,
+    scalp: { ELITE: 50, STRONG: 30, MEDIUM: 15, NO_TRADE: 0 },
+    swing: { ELITE: 20, STRONG: 10, MEDIUM: 5,  NO_TRADE: 0 },
+  } as Record<string, Record<string, number>>,
 
   // Score tier boundaries
   scoreTiers: {

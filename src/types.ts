@@ -11,6 +11,12 @@ export type Regime =
 export type ScoreTier = 'NO_TRADE' | 'MEDIUM' | 'STRONG' | 'ELITE';
 export type ExitReason = 'TP' | 'SL' | 'MANUAL' | 'CONDITION_CHANGE';
 
+/**
+ * SCALP  → primary timeframe 5m/1m, tight SL, expected hold < 1h, higher leverage (up to 50x)
+ * SWING  → primary timeframe 4h/15m, wider SL, expected hold 1-6h, moderate leverage (up to 20x)
+ */
+export type TradeType = 'SCALP' | 'SWING';
+
 export interface OHLCV {
   time: number;
   open: number;
@@ -45,11 +51,12 @@ export interface StrategySignal {
   strategy: string;
   asset: Asset;
   direction: Direction;
+  tradeType: TradeType;
   entryZone: [number, number]; // [low, high]
   stopLoss: number;
   takeProfit: number;
   components: ScoreComponents;
-  score: number;  // 0-100
+  score: number;   // 0-100
   tier: ScoreTier;
   regime: Regime;
   timestamp: number;
@@ -60,12 +67,18 @@ export interface ActivePosition {
   id: string;
   signal: StrategySignal;
   entryPrice: number;
-  suggestedSize: number;    // USDT notional
+  suggestedSize: number;       // USDT notional
   suggestedLeverage: number;
   dollarRisk: number;
   confirmedAt: number;
-  messageId: string;        // Discord message ID for updates
+  messageId: string;           // Discord message ID for edits
   channelId: string;
+  // Dynamic SL/TP tracking
+  currentStopLoss: number;     // may trail from original
+  currentTakeProfit: number;   // may extend from original
+  highestPrice: number;        // for long trailing (peak since entry)
+  lowestPrice: number;         // for short trailing (trough since entry)
+  lastSLTPUpdateAt: number;    // timestamp of last adjustment
   exitAlertSent: boolean;
 }
 
@@ -85,8 +98,8 @@ export interface PerformanceStats {
   avgScore: number;
   profitFactor: number;
   totalPnlDollar: number;
-  consecutiveLosses: number;
   byStrategy: Record<string, StrategyStats>;
+  byTradeType: Record<string, { trades: number; wins: number; winRate: number }>;
 }
 
 export interface StrategyStats {
@@ -100,10 +113,7 @@ export interface StrategyStats {
 export interface BotState {
   enabled: boolean;
   dailyLoss: number;
-  dailyLossDate: string;    // YYYY-MM-DD
-  consecutiveLosses: number;
-  riskMultiplier: number;   // 0.25–1.0 based on adaptation
-  recoveryTradesLeft: number;
+  dailyLossDate: string;         // YYYY-MM-DD
   strategyWeights: Record<string, number>; // 0.5–1.0
 }
 

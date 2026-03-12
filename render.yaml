@@ -1,0 +1,46 @@
+services:
+  - type: worker
+    name: discord-trading-bot
+    runtime: node
+    plan: starter           # $7/month — always-on background worker
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false          # You will set this in the Render dashboard
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: SIGNAL_CHANNEL_ID
+        sync: false
+      - key: SUMMARY_CHANNEL_ID
+        sync: false
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ACCOUNT_CAPITAL
+        value: "10000"
+      - key: RISK_PER_TRADE
+        value: "50"
+      - key: MAX_OPEN_POSITIONS
+        value: "3"
+      - key: MAX_DAILY_LOSS
+        value: "150"
+      - key: MIN_SCORE_THRESHOLD
+        value: "60"
+      - key: MAX_LEVERAGE_SCALP
+        value: "50"
+      - key: MAX_LEVERAGE_SWING
+        value: "20"
+      - key: SCAN_INTERVAL_MINUTES
+        value: "5"
+      - key: ENABLED
+        value: "true"
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: bot-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1              # $0.25/month — stores trades.json and state.json

@@ -77,11 +77,19 @@ export function computeStats(trades: ClosedTrade[]): PerformanceStats {
     st.avgScore = st.totalTrades > 0 ? st.avgScore / st.totalTrades : 0;
   }
 
-  // Consecutive losses at end of trade list
-  let consecutiveLosses = 0;
-  for (let i = trades.length - 1; i >= 0; i--) {
-    if (trades[i].pnlDollar <= 0) consecutiveLosses++;
-    else break;
+  // Per trade-type stats
+  const byTradeType: Record<string, { trades: number; wins: number; winRate: number }> = {
+    SCALP: { trades: 0, wins: 0, winRate: 0 },
+    SWING: { trades: 0, wins: 0, winRate: 0 },
+  };
+  for (const t of trades) {
+    const tt = t.signal.tradeType ?? 'SWING';
+    byTradeType[tt].trades++;
+    if (t.pnlDollar > 0) byTradeType[tt].wins++;
+  }
+  for (const tt of Object.keys(byTradeType)) {
+    const b = byTradeType[tt];
+    b.winRate = b.trades > 0 ? b.wins / b.trades : 0;
   }
 
   return {
@@ -92,8 +100,8 @@ export function computeStats(trades: ClosedTrade[]): PerformanceStats {
     avgScore,
     profitFactor,
     totalPnlDollar: grossProfit - grossLoss,
-    consecutiveLosses,
     byStrategy,
+    byTradeType,
   };
 }
 

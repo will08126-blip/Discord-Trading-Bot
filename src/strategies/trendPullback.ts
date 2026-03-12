@@ -12,7 +12,7 @@ import {
   isVolumeSpike,
   sessionQualityScore,
 } from '../indicators/indicators';
-import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier } from '../types';
+import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 /**
  * Trend Pullback Strategy
@@ -162,11 +162,17 @@ export class TrendPullbackStrategy extends BaseStrategy {
 
     if (tier === 'NO_TRADE') return null;
 
+    // Trend pullback confirms on 5m — it's a scalp entry on a 15m/4h trend
+    // Classify as SCALP when SL is tight (< 0.5%), otherwise SWING
+    const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
+    const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+
     return {
       id: uuidv4(),
       strategy: this.name,
       asset: data.asset,
       direction: isLong ? 'LONG' : 'SHORT',
+      tradeType,
       entryZone: [entryLow, entryHigh],
       stopLoss,
       takeProfit,
@@ -175,7 +181,7 @@ export class TrendPullbackStrategy extends BaseStrategy {
       tier,
       regime,
       timestamp: Date.now(),
-      notes: `RSI=${lastRsi15.toFixed(1)}, ATR=${lastAtr5m.toFixed(2)}`,
+      notes: `RSI=${lastRsi15.toFixed(1)}, ATR=${lastAtr5m.toFixed(2)}, ${tradeType}`,
     };
   }
 }

@@ -9,7 +9,7 @@ import {
   ema,
   rsi,
 } from '../indicators/indicators';
-import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, OHLCV } from '../types';
+import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType, OHLCV } from '../types';
 
 /**
  * Breakout Retest Strategy
@@ -171,11 +171,15 @@ export class BreakoutRetestStrategy extends BaseStrategy {
 
       if (tier === 'NO_TRADE') continue;
 
+      const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
+      const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+
       return {
         id: uuidv4(),
         strategy: this.name,
-        asset: candles15m === candles15m ? 'BTC/USDT:USDT' : 'ETH/USDT:USDT', // will be set by caller
+        asset: 'BTC/USDT:USDT', // placeholder — overwritten by engine with actual asset
         direction: isLong ? 'LONG' : 'SHORT',
+        tradeType,
         entryZone: [entryLow, entryHigh],
         stopLoss,
         takeProfit,
@@ -184,7 +188,7 @@ export class BreakoutRetestStrategy extends BaseStrategy {
         tier,
         regime,
         timestamp: Date.now(),
-        notes: `Level=${level.toFixed(2)}, Retests=${retestCount}`,
+        notes: `Level=${level.toFixed(2)}, Retests=${retestCount}, ${tradeType}`,
       };
     }
     return null;

@@ -10,7 +10,7 @@ import {
   sessionQualityScore,
   isVolumeSpike,
 } from '../indicators/indicators';
-import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier } from '../types';
+import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 /**
  * Volatility Expansion Strategy
@@ -147,11 +147,16 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
 
     if (tier === 'NO_TRADE') return null;
 
+    // Volatility expansion trades are wider — typically SWING leverage
+    const stopPct = Math.abs(entryZone[0] - stopLoss) / entryZone[0];
+    const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+
     return {
       id: uuidv4(),
       strategy: this.name,
       asset: data.asset,
       direction: isLong ? 'LONG' : 'SHORT',
+      tradeType,
       entryZone,
       stopLoss,
       takeProfit,
