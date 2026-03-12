@@ -7,23 +7,15 @@ services:
     startCommand: npm start
     envVars:
       - key: DISCORD_TOKEN
-        sync: false          # You will set this in the Render dashboard
+        sync: false          # Set in Render dashboard
       - key: DISCORD_CLIENT_ID
         sync: false
       - key: SIGNAL_CHANNEL_ID
         sync: false
       - key: SUMMARY_CHANNEL_ID
         sync: false
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_SECRET
-        sync: false
       - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: ACCOUNT_CAPITAL
-        value: "10000"
-      - key: RISK_PER_TRADE
-        value: "50"
+        sync: false          # Optional — for AI summaries
       - key: MAX_OPEN_POSITIONS
         value: "3"
       - key: MAX_DAILY_LOSS
