@@ -4,6 +4,7 @@ import { calculateRisk, formatPrice } from '../risk/riskCalculator';
 import { regimeLabel } from '../regime/regimeDetector';
 import { tierEmoji, tierColor } from '../scoring/votingEngine';
 import type { SingleAssetScanResult } from '../engine';
+import { config } from '../config';
 
 const LINE = '━━━━━━━━━━━━━━━━━━━━━━━';
 
@@ -270,7 +271,7 @@ export function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive = f
   });
 
   const title = isLive ? '📡 Live Watchlist — BTC · ETH · SOL · XRP · PEPE' : '📊 Watchlist Scan — BTC · ETH · SOL · XRP · PEPE';
-  const footer = isLive ? '🔄 Auto-refreshes every 5 min — use /live stop to stop' : 'Use /check <symbol> for full signal details';
+  const footer = isLive ? `🔄 Auto-refreshes every ${config.engine.scanIntervalMinutes} min — use /live stop to stop` : 'Use /check <symbol> for full signal details';
 
   return {
     embeds: [
