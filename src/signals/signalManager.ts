@@ -252,7 +252,7 @@ export function handleSLTPHit(update: SLTPUpdate): ClosedTrade | null {
 // ─── Duplicate suppression ────────────────────────────────────────────────────
 
 export function isDuplicateSignal(signal: StrategySignal): boolean {
-  const key = `${signal.asset}:${signal.direction}`;
+  const key = `${signal.asset}:${signal.direction}:${signal.strategy}`;
   const lastSent = recentlySentAssets.get(key);
   if (lastSent && Date.now() - lastSent < config.engine.duplicateWindowMs) {
     return true;
@@ -261,6 +261,6 @@ export function isDuplicateSignal(signal: StrategySignal): boolean {
 }
 
 export function markSignalSent(signal: StrategySignal): void {
-  const key = `${signal.asset}:${signal.direction}`;
+  const key = `${signal.asset}:${signal.direction}:${signal.strategy}`;
   recentlySentAssets.set(key, Date.now());
 }

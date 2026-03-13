@@ -79,11 +79,12 @@ export function computeStats(trades: ClosedTrade[]): PerformanceStats {
 
   // Per trade-type stats
   const byTradeType: Record<string, { trades: number; wins: number; winRate: number }> = {
-    SCALP: { trades: 0, wins: 0, winRate: 0 },
-    SWING: { trades: 0, wins: 0, winRate: 0 },
+    SCALP:  { trades: 0, wins: 0, winRate: 0 },
+    HYBRID: { trades: 0, wins: 0, winRate: 0 },
+    SWING:  { trades: 0, wins: 0, winRate: 0 },
   };
   for (const t of trades) {
-    const tt = t.signal.tradeType ?? 'SWING';
+    const tt = t.signal.tradeType ?? 'HYBRID';
     byTradeType[tt].trades++;
     if (t.pnlDollar > 0) byTradeType[tt].wins++;
   }

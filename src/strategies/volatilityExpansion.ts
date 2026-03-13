@@ -147,9 +147,8 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
 
     if (tier === 'NO_TRADE') return null;
 
-    // Volatility expansion trades are wider — typically SWING leverage
     const stopPct = Math.abs(entryZone[0] - stopLoss) / entryZone[0];
-    const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+    const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
 
     return {
       id: uuidv4(),

@@ -25,7 +25,7 @@ export function buildSignalEmbed(signal: StrategySignal) {
   const entry = risk.entryPrice;
 
   const title = `${tierEmoji(signal.tier)} ${signal.tier} ${signal.direction}  —  ${asset}/USDT`;
-  const tradeTypeLabel = signal.tradeType === 'SCALP' ? '⚡ Scalp' : '🌊 Swing';
+  const tradeTypeLabel = signal.tradeType === 'SCALP' ? '⚡ Scalp' : signal.tradeType === 'HYBRID' ? '🔀 Hybrid' : '🌊 Swing';
 
   const embed = new EmbedBuilder()
     .setColor(tierColor(signal.tier))
