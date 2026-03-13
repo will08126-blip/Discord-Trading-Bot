@@ -23,7 +23,7 @@ import {
 import { checkHardControls, getStrategyWeight } from './adaptation/adaptation';
 import {
   buildSignalEmbed,
-  buildSLTPUpdateEmbed,
+  buildTPUpdateEmbed,
   buildExitAlertEmbed,
   buildClosedTradeEmbed,
 } from './bot/embeds';
@@ -117,10 +117,9 @@ async function monitorActivePositions() {
       if (!channel?.isTextBased()) continue;
       const tc = channel as TextChannel;
 
-      // ── SL/TP hit ────────────────────────────────────────────────────────
-      if (update.hitSL || update.hitTP) {
-        const type = update.hitTP ? 'TP_HIT' : 'SL_HIT';
-        await tc.send(buildExitAlertEmbed(position, type, currentPrice));
+      // ── TP hit ───────────────────────────────────────────────────────────
+      if (update.hitTP) {
+        await tc.send(buildExitAlertEmbed(position, 'TP_HIT', currentPrice));
 
         const trade = handleSLTPHit(update);
         if (trade) {
@@ -129,13 +128,11 @@ async function monitorActivePositions() {
         continue;
       }
 
-      // ── SL/TP levels updated ─────────────────────────────────────────────
-      if (update.oldSL !== update.newSL || update.oldTP !== update.newTP) {
+      // ── TP level extended ────────────────────────────────────────────────
+      if (update.oldTP !== update.newTP) {
         await tc.send(
-          buildSLTPUpdateEmbed(
+          buildTPUpdateEmbed(
             position,
-            update.oldSL,
-            update.newSL,
             update.oldTP,
             update.newTP,
             currentPrice
@@ -143,15 +140,9 @@ async function monitorActivePositions() {
         );
       }
 
-      // ── Proximity alerts ─────────────────────────────────────────────────
-      const isLong = position.signal.direction === 'LONG';
-      const slDist = Math.abs(currentPrice - update.newSL) / currentPrice;
+      // ── TP proximity alert ───────────────────────────────────────────────
       const tpDist = Math.abs(currentPrice - update.newTP) / currentPrice;
-
-      if (!position.exitAlertSent && slDist < 0.005) {
-        await tc.send(buildExitAlertEmbed(position, 'SL_APPROACH', currentPrice));
-        position.exitAlertSent = true;
-      } else if (tpDist < 0.003) {
+      if (tpDist < 0.003) {
         await tc.send(buildExitAlertEmbed(position, 'TP_APPROACH', currentPrice));
       }
     } catch (err) {
