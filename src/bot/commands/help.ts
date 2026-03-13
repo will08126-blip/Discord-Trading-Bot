@@ -42,6 +42,18 @@ const COMMANDS = [
     desc: 'Display current bot configuration: scan interval, max positions, daily loss limit, score threshold, leverage caps, and assets monitored.',
   },
   {
+    name: '/check <symbol>',
+    desc: 'Immediately analyze any symbol (e.g. SOL, DOGE, BTC/USDT). Shows all 4 strategy results including below-threshold setups — no score filter applied.',
+  },
+  {
+    name: '/watchlist',
+    desc: 'Snapshot scan of BTC, ETH, SOL, XRP, PEPE. Shows only signals above the score threshold with score, leverage, and % deployment.',
+  },
+  {
+    name: '/live <start|stop>',
+    desc: 'Start an auto-updating watchlist dashboard for BTC/ETH/SOL/XRP/PEPE that refreshes every 5 minutes. Only one dashboard active at a time.',
+  },
+  {
     name: '/help',
     desc: 'Show this message.',
   },
