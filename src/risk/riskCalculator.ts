@@ -88,7 +88,16 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
 }
 
 export function formatPrice(price: number, asset: string): string {
-  const decimals = asset.startsWith('BTC') ? 0 : 1;
+  let decimals: number;
+  if (asset.startsWith('BTC')) {
+    decimals = 0;
+  } else if (price < 0.0001) {
+    decimals = 8;  // micro-caps like PEPE (~0.000012)
+  } else if (price < 1) {
+    decimals = 5;  // sub-dollar assets
+  } else {
+    decimals = 2;  // standard (ETH, SOL, XRP)
+  }
   return `$${price.toLocaleString('en-US', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

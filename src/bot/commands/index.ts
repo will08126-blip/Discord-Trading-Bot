@@ -12,6 +12,9 @@ import * as scanCmd from './scan';
 import * as historyCmd from './history';
 import * as helpCmd from './help';
 import * as configCmd from './config';
+import * as checkCmd from './check';
+import * as watchlistCmd from './watchlist';
+import * as liveCmd from './live';
 
 export interface Command {
   data: { toJSON: () => unknown; name: string };
@@ -29,6 +32,9 @@ export const commands = new Map<string, Command>([
   ['history', historyCmd],
   ['help', helpCmd],
   ['config', configCmd],
+  ['check', checkCmd],
+  ['watchlist', watchlistCmd],
+  ['live', liveCmd],
 ]);
 
 /** Deploy (register) all slash commands with Discord's API */

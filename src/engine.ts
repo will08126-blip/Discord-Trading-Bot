@@ -30,7 +30,7 @@ import {
 import { generateDailySummary } from './llm/summaries';
 import { config } from './config';
 import { logger } from './utils/logger';
-import type { Asset, MultiTimeframeData } from './types';
+import type { Asset, MultiTimeframeData, RegimeResult, StrategySignal } from './types';
 
 const strategies = [
   new TrendPullbackStrategy(),
@@ -38,6 +38,53 @@ const strategies = [
   new LiquiditySweepStrategy(),
   new VolatilityExpansionStrategy(),
 ];
+
+// ─── Single-asset scan (used by /check, /watchlist, /live) ───────────────────
+
+export interface SingleAssetScanResult {
+  asset: string;
+  regime: RegimeResult | null;
+  signals: StrategySignal[];  // all signals from all strategies (any tier)
+  error?: string;
+}
+
+export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanResult> {
+  try {
+    const asset = symbol as Asset;
+    const [candles4h, candles15m, candles5m, candles1m] = await Promise.all([
+      fetchOHLCV(asset, '4h', 200),
+      fetchOHLCV(asset, '15m', 200),
+      fetchOHLCV(asset, '5m', 200),
+      fetchOHLCV(asset, '1m', 200),
+    ]);
+    const mtfData: MultiTimeframeData = {
+      asset,
+      '4h': candles4h,
+      '15m': candles15m,
+      '5m': candles5m,
+      '1m': candles1m,
+    };
+    const regime = detectRegime(asset, candles4h);
+    setLastRegime(asset, regime);
+
+    const signals: StrategySignal[] = [];
+    for (const strategy of strategies) {
+      try {
+        let signal = strategy.analyze(mtfData, regime.regime);
+        if (!signal) continue;
+        signal = { ...signal, asset };
+        const weight = getStrategyWeight(strategy.name);
+        signal = applyAdaptationWeight(signal, weight);
+        signals.push(signal);
+      } catch {
+        // skip failing strategies silently
+      }
+    }
+    return { asset: symbol, regime, signals };
+  } catch (err) {
+    return { asset: symbol, regime: null, signals: [], error: String(err) };
+  }
+}
 
 // ─── Signal posting ───────────────────────────────────────────────────────────
 
