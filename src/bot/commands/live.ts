@@ -71,10 +71,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply();
 
   const results = await Promise.all(WATCHLIST.map((asset) => scanSingleAsset(asset)));
-  await interaction.editReply(buildWatchlistEmbed(results, true));
-
-  // Grab the message object so we can edit it on each refresh cycle
-  const message = (await interaction.fetchReply()) as Message;
+  // editReply() returns the Message directly in discord.js v14 — no extra fetch needed
+  const message = (await interaction.editReply(buildWatchlistEmbed(results, true))) as Message;
 
   const intervalMs = config.engine.scanIntervalMinutes * 60 * 1000;
   const timer = setInterval(async () => {

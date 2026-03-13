@@ -19,10 +19,16 @@ export async function onInteractionCreate(interaction: Interaction): Promise<voi
     } catch (err) {
       logger.error(`Command /${interaction.commandName} error:`, err);
       const msg = { content: '❌ An error occurred running this command.', ephemeral: true };
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(msg);
-      } else {
-        await interaction.reply(msg);
+      try {
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp(msg);
+        } else {
+          await interaction.reply(msg);
+        }
+      } catch (replyErr) {
+        // Interaction token likely expired (e.g. CCXT hung for >15 min).
+        // Log and swallow — there is nothing else we can do at this point.
+        logger.warn(`Could not send error response for /${interaction.commandName}:`, replyErr);
       }
     }
     return;
