@@ -19,6 +19,7 @@ import {
   markSignalSent,
   updateDynamicSLTP,
   handleSLTPHit,
+  attemptMomentumTPExtension,
 } from './signals/signalManager';
 import { checkHardControls, getStrategyWeight } from './adaptation/adaptation';
 import {
@@ -140,10 +141,17 @@ async function monitorActivePositions() {
         );
       }
 
-      // ── TP proximity alert ───────────────────────────────────────────────
+      // ── TP proximity: try to extend before alerting ──────────────────────
       const tpDist = Math.abs(currentPrice - update.newTP) / currentPrice;
       if (tpDist < 0.003) {
-        await tc.send(buildExitAlertEmbed(position, 'TP_APPROACH', currentPrice));
+        const extension = attemptMomentumTPExtension(position, candles5m, currentPrice);
+        if (extension) {
+          // Momentum is strong — push TP out and let it run
+          await tc.send(buildTPUpdateEmbed(position, extension.oldTP, extension.newTP, currentPrice));
+        } else {
+          // Momentum is fading or cap reached — alert to consider taking profit
+          await tc.send(buildExitAlertEmbed(position, 'TP_APPROACH', currentPrice));
+        }
       }
     } catch (err) {
       logger.error(`Error monitoring position ${position.id}:`, err);
