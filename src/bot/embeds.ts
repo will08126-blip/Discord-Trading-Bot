@@ -64,7 +64,7 @@ export function buildSignalEmbed(signal: StrategySignal) {
       },
       {
         name: LINE,
-        value: '✅ **Click "Entered"** if you took this trade  |  ❌ to dismiss',
+        value: '**Took this trade on your exchange?** Click ✅ **Entered** below — the bot will track it for you and alert you when to exit.',
         inline: false,
       }
     )
@@ -110,6 +110,7 @@ export function buildPositionEmbed(position: ActivePosition, currentPrice?: numb
   const embed = new EmbedBuilder()
     .setColor(isLong ? 0x00cc44 : 0xff4444)
     .setTitle(`${dirEmoji(position.signal.direction)} TRACKING: ${asset} ${position.signal.direction}`)
+    .setDescription('Your trade is being tracked. When you close it on your exchange, click **Close Position** below — the bot will fetch the current price for you.')
     .addFields({
       name: LINE,
       value: [
@@ -128,9 +129,17 @@ export function buildPositionEmbed(position: ActivePosition, currentPrice?: numb
       inline: false,
     })
     .setTimestamp()
-    .setFooter({ text: `Position ID: ${position.id.slice(0, 8)} — use /close ${position.id.slice(0, 8)} <price> to close` });
+    .setFooter({ text: `Position ID: ${position.id.slice(0, 8)}` });
 
-  return { embeds: [embed] };
+  const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`closePosition:${position.id}`)
+      .setLabel('Close Position')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔴')
+  );
+
+  return { embeds: [embed], components: [closeRow] };
 }
 
 // ─── Exit alert embed ─────────────────────────────────────────────────────────
@@ -145,14 +154,14 @@ export function buildExitAlertEmbed(
   const asset = position.signal.asset.split('/')[0];
   const isLong = position.signal.direction === 'LONG';
 
-  const labels: Record<string, { emoji: string; title: string; color: number }> = {
-    SL_APPROACH: { emoji: '⚠️', title: 'SL APPROACHING', color: 0xffa500 },
-    TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING', color: 0x00ccff },
-    SL_HIT:      { emoji: '🛑', title: 'STOP LOSS HIT — Consider Exiting', color: 0xff0000 },
-    TP_HIT:      { emoji: '🎯', title: 'TAKE PROFIT HIT — Consider Exiting', color: 0x00ff00 },
+  const labels: Record<string, { emoji: string; title: string; color: number; desc: string }> = {
+    SL_APPROACH: { emoji: '⚠️', title: 'SL APPROACHING', color: 0xffa500, desc: 'Your stop loss level is close. Be ready to exit.' },
+    TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING', color: 0x00ccff, desc: 'Price is near your take profit. Consider locking in gains.' },
+    SL_HIT:      { emoji: '🛑', title: 'STOP LOSS HIT', color: 0xff0000, desc: 'Your stop loss has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
+    TP_HIT:      { emoji: '🎯', title: 'TAKE PROFIT HIT', color: 0x00ff00, desc: 'Your take profit has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
   };
 
-  const { emoji, title, color } = labels[type];
+  const { emoji, title, color, desc } = labels[type];
   const pnlPct = isLong
     ? (currentPrice - position.entryPrice) / position.entryPrice
     : (position.entryPrice - currentPrice) / position.entryPrice;
@@ -160,6 +169,7 @@ export function buildExitAlertEmbed(
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(`${emoji} ${asset} ${position.signal.direction} — ${title}`)
+    .setDescription(desc)
     .addFields({
       name: LINE,
       value: [
@@ -168,15 +178,21 @@ export function buildExitAlertEmbed(
         newSL ? `🛑 **SL (updated):** ${formatPrice(newSL, asset)}` : `🛑 **SL:** ${formatPrice(position.currentStopLoss, asset)}`,
         newTP ? `🎯 **TP (updated):** ${formatPrice(newTP, asset)}` : `🎯 **TP:** ${formatPrice(position.currentTakeProfit, asset)}`,
         `📊 **Unrealised P&L:** ${pnlPct >= 0 ? '+' : ''}${(pnlPct * 100).toFixed(2)}%`,
-        '',
-        `Use \`/close ${position.id.slice(0, 8)} <exit-price>\` to record your exit.`,
       ].filter(Boolean).join('\n'),
       inline: false,
     })
     .setTimestamp()
     .setFooter({ text: `Position ID: ${position.id.slice(0, 8)}` });
 
-  return { embeds: [embed] };
+  const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`closePosition:${position.id}`)
+      .setLabel('Close Position')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔴')
+  );
+
+  return { embeds: [embed], components: [closeRow] };
 }
 
 // ─── SL/TP update embed ───────────────────────────────────────────────────────
