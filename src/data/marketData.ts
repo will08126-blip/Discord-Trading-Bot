@@ -15,6 +15,7 @@ function getExchange(): any {
     // No API key needed — Binance Futures public endpoints are free and unauthenticated
     exchange = new ccxt.binanceusdm({
       enableRateLimit: true,
+      timeout: 10000, // 10 s — fail fast rather than hanging indefinitely
       options: { defaultType: 'future' },
     });
   }
@@ -37,8 +38,8 @@ function checkStaleness(candles: OHLCV[], timeframe: Timeframe): void {
   const lastCandle = candles[candles.length - 1];
   const age = Date.now() - lastCandle.time;
   if (age > staleThreshold) {
-    throw new Error(
-      `Stale data for ${timeframe}: last candle is ${Math.round(age / 1000)}s old`
+    logger.warn(
+      `Stale data for ${timeframe}: last candle is ${Math.round(age / 1000)}s old — using anyway`
     );
   }
 }
