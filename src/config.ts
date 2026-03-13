@@ -42,6 +42,7 @@ export const config = {
   engine: {
     scanIntervalMinutes: Number(optionalEnv('SCAN_INTERVAL_MINUTES', '5')),
     enabled: optionalEnv('ENABLED', 'true') === 'true',
+    exchangeId: optionalEnv('EXCHANGE_ID', 'bybit'),
     // Duplicate signal suppression window (ms)
     duplicateWindowMs: 30 * 60 * 1000,
     // Stale data thresholds per timeframe (ms) — 2× the candle size
