@@ -10,6 +10,8 @@ export const data = new SlashCommandBuilder()
   .setDescription('Show bot status: regime, pending signals, open positions, and daily P&L');
 
 export async function execute(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply();
+
   const state = loadState();
   const pending = getAllPendingSignals();
   const active = getAllActivePositions();
@@ -40,7 +42,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       },
       {
         name: '📅 Today',
-        value: `P&L: **${pnlStr}**  |  Limit: $${config.trading.maxDailyLoss}`,
+        value: `P&L: **${pnlStr}**  |  Daily loss limit: ${config.trading.maxDailyLoss}R`,
         inline: false,
       },
       {
@@ -67,5 +69,5 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     )
     .setTimestamp();
 
-  await interaction.reply({ embeds: [embed], ephemeral: false });
+  await interaction.editReply({ embeds: [embed] });
 }

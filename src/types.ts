@@ -12,10 +12,11 @@ export type ScoreTier = 'NO_TRADE' | 'MEDIUM' | 'STRONG' | 'ELITE';
 export type ExitReason = 'TP' | 'SL' | 'MANUAL' | 'CONDITION_CHANGE';
 
 /**
- * SCALP  → primary timeframe 5m/1m, tight SL, expected hold < 1h, higher leverage (up to 50x)
- * SWING  → primary timeframe 4h/15m, wider SL, expected hold 1-6h, moderate leverage (up to 20x)
+ * SCALP  → SL < 0.3%, 5m/1m entry, hold < 1h,   high leverage (up to 50x)
+ * HYBRID → SL 0.3-1.5%, 5m/15m, hold 1-4h,       medium leverage (up to 30x)
+ * SWING  → SL > 1.5%, 15m/4h,  hold 4-24h,        lower leverage (up to 20x)
  */
-export type TradeType = 'SCALP' | 'SWING';
+export type TradeType = 'SCALP' | 'HYBRID' | 'SWING';
 
 export interface OHLCV {
   time: number;

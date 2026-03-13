@@ -162,10 +162,8 @@ export class TrendPullbackStrategy extends BaseStrategy {
 
     if (tier === 'NO_TRADE') return null;
 
-    // Trend pullback confirms on 5m — it's a scalp entry on a 15m/4h trend
-    // Classify as SCALP when SL is tight (< 0.5%), otherwise SWING
     const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-    const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+    const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
 
     return {
       id: uuidv4(),
@@ -181,7 +179,7 @@ export class TrendPullbackStrategy extends BaseStrategy {
       tier,
       regime,
       timestamp: Date.now(),
-      notes: `RSI=${lastRsi15.toFixed(1)}, ATR=${lastAtr5m.toFixed(2)}, ${tradeType}`,
+      notes: `RSI=${lastRsi15.toFixed(1)}, SL=${(stopPct*100).toFixed(2)}%, ${tradeType}`,
     };
   }
 }

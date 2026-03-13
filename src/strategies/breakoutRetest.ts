@@ -172,7 +172,7 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       if (tier === 'NO_TRADE') continue;
 
       const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-      const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+      const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
 
       return {
         id: uuidv4(),

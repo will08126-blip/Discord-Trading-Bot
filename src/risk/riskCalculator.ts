@@ -22,17 +22,21 @@ export interface RiskParameters {
  * is higher and stops are tighter, so the % risk stays manageable.
  */
 const RISK_PCT: Record<string, Record<ScoreTier, number>> = {
-  scalp: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
-  swing: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
+  scalp:  { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
+  hybrid: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
+  swing:  { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
 };
 
 const REFERENCE_CAPITALS = [500, 1000, 2500, 5000, 10000];
 
 function leverageCap(tier: ScoreTier, tradeType: TradeType): number {
-  const tiers = config.leverageTiers[tradeType === 'SCALP' ? 'scalp' : 'swing'];
+  const typeKey = tradeType === 'SCALP' ? 'scalp' : tradeType === 'HYBRID' ? 'hybrid' : 'swing';
+  const tiers = config.leverageTiers[typeKey];
   const byTier = tiers[tier] ?? 5;
   const hardCap = tradeType === 'SCALP'
     ? config.trading.maxLeverageScalp
+    : tradeType === 'HYBRID'
+    ? config.trading.maxLeverageHybrid
     : config.trading.maxLeverageSwing;
   return Math.min(byTier, hardCap);
 }
@@ -40,7 +44,9 @@ function leverageCap(tier: ScoreTier, tradeType: TradeType): number {
 export function classifyTradeType(signal: StrategySignal): TradeType {
   const entry = (signal.entryZone[0] + signal.entryZone[1]) / 2;
   const stopPct = Math.abs(entry - signal.stopLoss) / entry;
-  return stopPct < 0.005 ? 'SCALP' : 'SWING';
+  if (stopPct < 0.003) return 'SCALP';
+  if (stopPct < 0.015) return 'HYBRID';
+  return 'SWING';
 }
 
 export function calculateRisk(signal: StrategySignal): RiskParameters {
@@ -52,7 +58,7 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
   const rewardRiskRatio = stopDistance > 0 ? rewardDistance / stopDistance : 0;
 
   const tradeType = signal.tradeType ?? classifyTradeType(signal);
-  const typeKey = tradeType === 'SCALP' ? 'scalp' : 'swing';
+  const typeKey = tradeType === 'SCALP' ? 'scalp' : tradeType === 'HYBRID' ? 'hybrid' : 'swing';
 
   // Confidence-based risk %
   const riskPct = RISK_PCT[typeKey][signal.tier] ?? 1.0;
