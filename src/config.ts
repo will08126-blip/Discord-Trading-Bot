@@ -29,7 +29,7 @@ export const config = {
   },
 
   trading: {
-    assets: ['BTC/USDT:USDT', 'ETH/USDT:USDT'] as const,
+    assets: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'PEPE/USDT:USDT'] as const,
     // No fixed capital — sizing is confidence-based (% of whatever you allocate)
     maxOpenPositions: Number(optionalEnv('MAX_OPEN_POSITIONS', '3')),
     maxDailyLoss: Number(optionalEnv('MAX_DAILY_LOSS', '150')),

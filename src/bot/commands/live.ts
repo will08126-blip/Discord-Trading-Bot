@@ -1,0 +1,91 @@
+import { SlashCommandBuilder, ChatInputCommandInteraction, Message, EmbedBuilder } from 'discord.js';
+import type { Asset } from '../../types';
+import { scanSingleAsset } from '../../engine';
+import { buildWatchlistEmbed } from '../embeds';
+import { config } from '../../config';
+import { logger } from '../../utils/logger';
+
+const WATCHLIST: Asset[] = [
+  'BTC/USDT:USDT',
+  'ETH/USDT:USDT',
+  'SOL/USDT:USDT',
+  'XRP/USDT:USDT',
+  'PEPE/USDT:USDT',
+];
+
+// Module-scoped state — only one live dashboard active at a time
+let liveDashboard: {
+  timer: ReturnType<typeof setInterval>;
+  message: Message;
+} | null = null;
+
+export const data = new SlashCommandBuilder()
+  .setName('live')
+  .setDescription('Auto-updating watchlist dashboard for BTC, ETH, SOL, XRP, PEPE')
+  .addStringOption((opt) =>
+    opt
+      .setName('action')
+      .setDescription('start (default) or stop')
+      .setRequired(false)
+      .addChoices({ name: 'start', value: 'start' }, { name: 'stop', value: 'stop' })
+  );
+
+export async function execute(interaction: ChatInputCommandInteraction) {
+  const action = (interaction.options.getString('action') ?? 'start') as 'start' | 'stop';
+
+  // ── Stop ──────────────────────────────────────────────────────────────────
+  if (action === 'stop') {
+    if (!liveDashboard) {
+      await interaction.reply({ content: 'No live dashboard is currently running.', ephemeral: true });
+      return;
+    }
+
+    clearInterval(liveDashboard.timer);
+    try {
+      await liveDashboard.message.edit({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xff4444)
+            .setTitle('🔴 Live Watchlist — Stopped')
+            .setDescription('Dashboard was stopped via `/live stop`.')
+            .setTimestamp(),
+        ],
+      });
+    } catch (err) {
+      logger.warn('Could not edit stopped live dashboard message:', err);
+    }
+    liveDashboard = null;
+    await interaction.reply({ content: '✅ Live dashboard stopped.', ephemeral: true });
+    return;
+  }
+
+  // ── Start ─────────────────────────────────────────────────────────────────
+  if (liveDashboard) {
+    await interaction.reply({
+      content: 'A live dashboard is already running. Use `/live stop` first.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  const results = await Promise.all(WATCHLIST.map((asset) => scanSingleAsset(asset)));
+  await interaction.editReply(buildWatchlistEmbed(results, true));
+
+  // Grab the message object so we can edit it on each refresh cycle
+  const message = (await interaction.fetchReply()) as Message;
+
+  const intervalMs = config.engine.scanIntervalMinutes * 60 * 1000;
+  const timer = setInterval(async () => {
+    try {
+      const fresh = await Promise.all(WATCHLIST.map((asset) => scanSingleAsset(asset)));
+      await message.edit(buildWatchlistEmbed(fresh, true));
+    } catch (err) {
+      logger.error('Live dashboard refresh error:', err);
+    }
+  }, intervalMs);
+
+  liveDashboard = { timer, message };
+  logger.info(`Live dashboard started — refreshing every ${config.engine.scanIntervalMinutes} min`);
+}

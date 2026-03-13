@@ -3,6 +3,7 @@ import type { StrategySignal, ActivePosition, ClosedTrade } from '../types';
 import { calculateRisk, formatPrice } from '../risk/riskCalculator';
 import { regimeLabel } from '../regime/regimeDetector';
 import { tierEmoji, tierColor } from '../scoring/votingEngine';
+import type { SingleAssetScanResult } from '../engine';
 
 const LINE = '━━━━━━━━━━━━━━━━━━━━━━━';
 
@@ -204,6 +205,83 @@ export function buildSLTPUpdateEmbed(
     .setFooter({ text: `Position ID: ${position.id.slice(0, 8)}` });
 
   return { embeds: [embed] };
+}
+
+// ─── /check summary embed ─────────────────────────────────────────────────────
+
+export function buildCheckSummaryEmbed(result: SingleAssetScanResult) {
+  const assetLabel = result.asset.replace('/USDT:USDT', '');
+  const regimeStr = result.regime ? regimeLabel(result.regime.regime) : 'Unknown';
+  const adxStr = result.regime ? ` (ADX: ${result.regime.adx.toFixed(1)}, ATR×: ${result.regime.atrRatio.toFixed(2)})` : '';
+
+  const strategyNames = ['Trend Pullback', 'Breakout Retest', 'Liquidity Sweep', 'Volatility Expansion'];
+  const signalsByStrategy = new Map(result.signals.map((s) => [s.strategy, s]));
+
+  const strategyLines = strategyNames.map((name) => {
+    const s = signalsByStrategy.get(name);
+    if (!s) return `**${name}** — no pattern detected`;
+    const risk = calculateRisk(s);
+    return (
+      `**${name}** — ${dirEmoji(s.direction)} ${s.direction}  |  ` +
+      `Score: **${s.score}/100** ${tierEmoji(s.tier)}  |  ` +
+      `Lev: **${risk.suggestedLeverage}x**  |  Risk: **${risk.riskPct}%**`
+    );
+  });
+
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(`🔍 ${assetLabel}/USDT — Manual Scan`)
+    .setDescription(`**Regime:** ${regimeStr}${adxStr}`)
+    .addFields({
+      name: LINE,
+      value: strategyLines.join('\n'),
+      inline: false,
+    })
+    .setTimestamp()
+    .setFooter({ text: 'Qualifying signals (score ≥ 60) posted below with full details' });
+}
+
+// ─── /watchlist + /live summary embed ─────────────────────────────────────────
+
+export function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive = false) {
+  const lines = results.map((result) => {
+    const assetLabel = result.asset.replace('/USDT:USDT', '');
+
+    if (result.error) {
+      return `**${assetLabel}** — ⚠️ fetch error`;
+    }
+
+    const regimeStr = result.regime ? regimeLabel(result.regime.regime) : '?';
+    const qualifying = result.signals.filter((s) => s.tier !== 'NO_TRADE');
+
+    if (qualifying.length === 0) {
+      return `**${assetLabel}** — no setup  *(${regimeStr})*`;
+    }
+
+    return qualifying.map((s) => {
+      const risk = calculateRisk(s);
+      return (
+        `**${assetLabel}** ${dirEmoji(s.direction)} ${s.direction}  |  ` +
+        `Score: **${s.score}** ${tierEmoji(s.tier)}  |  ` +
+        `Lev: **${risk.suggestedLeverage}x**  |  Risk: **${risk.riskPct}%**  ` +
+        `*(${s.strategy})*`
+      );
+    }).join('\n');
+  });
+
+  const title = isLive ? '📡 Live Watchlist — BTC · ETH · SOL · XRP · PEPE' : '📊 Watchlist Scan — BTC · ETH · SOL · XRP · PEPE';
+  const footer = isLive ? '🔄 Auto-refreshes every 5 min — use /live stop to stop' : 'Use /check <symbol> for full signal details';
+
+  return {
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0x5865f2)
+        .setTitle(title)
+        .addFields({ name: LINE, value: lines.join('\n') || 'No setups found across watchlist.', inline: false })
+        .setTimestamp()
+        .setFooter({ text: footer }),
+    ],
+  };
 }
 
 // ─── Closed trade embed ────────────────────────────────────────────────────────
