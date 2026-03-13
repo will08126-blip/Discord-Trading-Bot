@@ -201,21 +201,33 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
       for (const strategy of strategies) {
         try {
           let signal = strategy.analyze(mtfData, regime.regime);
-          if (!signal) continue;
+          if (!signal) {
+            logger.info(`  ${strategy.name}: no setup detected`);
+            continue;
+          }
 
           // Fix asset on signals that use placeholder
           signal = { ...signal, asset };
 
           // Apply adaptation weight
           const weight = getStrategyWeight(strategy.name);
+          const preWeightScore = signal.score;
           signal = applyAdaptationWeight(signal, weight);
 
-          if (signal.tier === 'NO_TRADE') continue;
+          const weightNote = weight < 1.0
+            ? ` [weight=${weight.toFixed(2)}, score ${preWeightScore}→${signal.score}]`
+            : '';
+
+          if (signal.tier === 'NO_TRADE') {
+            logger.info(`  ${strategy.name}: score=${signal.score} NO_TRADE${weightNote} — filtered out`);
+            continue;
+          }
           if (isDuplicateSignal(signal)) {
-            logger.debug(`Duplicate signal suppressed: ${asset} ${signal.direction}`);
+            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed (10min window)`);
             continue;
           }
 
+          logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} ✓ queued`);
           newSignals.push(signal);
         } catch (err) {
           logger.error(`Strategy ${strategy.name} error for ${asset}:`, err);
@@ -227,7 +239,7 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
     const ranked = filterAndRankSignals(newSignals, config.trading.minScoreThreshold);
     const deduped = deduplicateSignals(ranked);
 
-    logger.info(`Scan complete: ${deduped.length} qualifying signals`);
+    logger.info(`Scan complete: ${newSignals.length} raw → ${ranked.length} ranked → ${deduped.length} posted`);
 
     for (const signal of deduped) {
       await postSignal(signal);

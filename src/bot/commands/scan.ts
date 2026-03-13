@@ -26,7 +26,15 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     embed
       .setColor(0x5865f2)
       .setTitle('🔍 Scan Complete')
-      .setDescription('No qualifying signals found this cycle. Market conditions may not meet the score threshold.');
+      .setDescription(
+        'No qualifying signals this cycle.\n\n' +
+        'Possible reasons:\n' +
+        '• All assets in POOR/unfavourable regime\n' +
+        '• Strategies not finding setups in current market structure\n' +
+        '• Scores suppressed by adaptation weights (check `/status`)\n' +
+        '• Same signals already sent recently (10-min duplicate window)\n\n' +
+        'Run `/status` to see strategy weights and regimes, or `/check BTC` to inspect a specific asset.'
+      );
   }
 
   await interaction.editReply({ embeds: [embed] });
