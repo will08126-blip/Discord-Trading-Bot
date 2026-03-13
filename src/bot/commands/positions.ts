@@ -20,7 +20,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     .setTimestamp();
 
   for (const pos of positions) {
-    const asset = pos.signal.asset.replace('/USDT:USDT', '');
+    const asset = pos.signal.asset.split('/')[0];
     const isLong = pos.signal.direction === 'LONG';
     const held = Math.round((Date.now() - pos.confirmedAt) / 60000);
     embed.addFields({

@@ -92,7 +92,7 @@ export async function generateWeeklySummary(): Promise<string> {
 export async function explainTrade(trade: ClosedTrade): Promise<string> {
   try {
     const dir = trade.signal.direction;
-    const asset = trade.signal.asset.replace('/USDT:USDT', '');
+    const asset = trade.signal.asset.split('/')[0];
     const pnl = trade.pnlDollar >= 0 ? `+$${trade.pnlDollar.toFixed(2)}` : `-$${Math.abs(trade.pnlDollar).toFixed(2)}`;
     const context = [
       `Asset: ${asset}`,

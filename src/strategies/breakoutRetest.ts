@@ -177,7 +177,7 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       return {
         id: uuidv4(),
         strategy: this.name,
-        asset: 'BTC/USDT:USDT', // placeholder — overwritten by engine with actual asset
+        asset: 'BTC/USDT', // placeholder — overwritten by engine with actual asset
         direction: isLong ? 'LONG' : 'SHORT',
         tradeType,
         entryZone: [entryLow, entryHigh],

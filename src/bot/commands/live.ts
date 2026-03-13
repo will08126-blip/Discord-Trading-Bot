@@ -6,11 +6,11 @@ import { config } from '../../config';
 import { logger } from '../../utils/logger';
 
 const WATCHLIST: Asset[] = [
-  'BTC/USDT:USDT',
-  'ETH/USDT:USDT',
-  'SOL/USDT:USDT',
-  'XRP/USDT:USDT',
-  'PEPE/USDT:USDT',
+  'BTC/USDT',
+  'ETH/USDT',
+  'SOL/USDT',
+  'XRP/USDT',
+  'PEPE/USDT',
 ];
 
 // Module-scoped state — only one live dashboard active at a time

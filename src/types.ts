@@ -1,4 +1,4 @@
-export type Asset = 'BTC/USDT:USDT' | 'ETH/USDT:USDT' | 'SOL/USDT:USDT' | 'XRP/USDT:USDT' | 'PEPE/USDT:USDT';
+export type Asset = 'BTC/USDT' | 'ETH/USDT' | 'SOL/USDT' | 'XRP/USDT' | 'PEPE/USDT';
 export type Timeframe = '4h' | '15m' | '5m' | '1m';
 export type Direction = 'LONG' | 'SHORT';
 export type Regime =

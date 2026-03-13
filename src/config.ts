@@ -21,7 +21,7 @@ export const config = {
     summaryChannelId: requireEnv('SUMMARY_CHANNEL_ID'),
   },
 
-  // Binance public API — no key required for OHLCV market data
+  // Public spot market data — no API key required
 
   anthropic: {
     apiKey: optionalEnv('ANTHROPIC_API_KEY', ''),
@@ -29,7 +29,7 @@ export const config = {
   },
 
   trading: {
-    assets: ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'PEPE/USDT:USDT'] as const,
+    assets: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'PEPE/USDT'] as const,
     // No fixed capital — sizing is confidence-based (% of whatever you allocate)
     maxOpenPositions: Number(optionalEnv('MAX_OPEN_POSITIONS', '3')),
     maxDailyLoss: Number(optionalEnv('MAX_DAILY_LOSS', '150')),
@@ -42,6 +42,7 @@ export const config = {
   engine: {
     scanIntervalMinutes: Number(optionalEnv('SCAN_INTERVAL_MINUTES', '5')),
     enabled: optionalEnv('ENABLED', 'true') === 'true',
+    exchangeId: optionalEnv('EXCHANGE_ID', 'binance'),
     // Duplicate signal suppression window (ms)
     duplicateWindowMs: 30 * 60 * 1000,
     // Stale data thresholds per timeframe (ms) — 2× the candle size

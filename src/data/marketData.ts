@@ -8,18 +8,59 @@ import { logger } from '../utils/logger';
 const TIMEFRAMES: Timeframe[] = ['4h', '15m', '5m', '1m'];
 const CANDLE_LIMIT = 200; // enough for all indicators
 
+// Spot exchanges only — no geo-restricted futures endpoints.
+// All three support BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, PEPE/USDT with no API key.
+const EXCHANGE_PRIORITY = ['binance', 'gate', 'mexc'];
+
+function resolveStartIndex(): number {
+  const id = config.engine.exchangeId;
+  const idx = EXCHANGE_PRIORITY.indexOf(id);
+  return idx >= 0 ? idx : 0;
+}
+
+let currentExchangeIndex = resolveStartIndex();
 let exchange: any = null;
 
 function getExchange(): any {
   if (!exchange) {
-    // No API key needed — Binance Futures public endpoints are free and unauthenticated
-    exchange = new ccxt.binanceusdm({
+    const id = EXCHANGE_PRIORITY[currentExchangeIndex];
+    logger.info(`[marketData] Using exchange: ${id}`);
+    exchange = new ccxt[id]({
       enableRateLimit: true,
       timeout: 10000, // 10 s — fail fast rather than hanging indefinitely
-      options: { defaultType: 'future' },
     });
   }
   return exchange;
+}
+
+function isAvailabilityError(err: unknown): boolean {
+  return err instanceof ccxt.ExchangeNotAvailable || err instanceof ccxt.NetworkError;
+}
+
+function advanceExchange(err: unknown): boolean {
+  if (currentExchangeIndex >= EXCHANGE_PRIORITY.length - 1) return false;
+  const failed = EXCHANGE_PRIORITY[currentExchangeIndex];
+  currentExchangeIndex++;
+  exchange = null; // force fresh instance on next getExchange() call
+  logger.warn(
+    `[marketData] Exchange "${failed}" unavailable (${(err as Error).message?.slice(0, 80)}). ` +
+      `Falling back to "${EXCHANGE_PRIORITY[currentExchangeIndex]}".`
+  );
+  return true;
+}
+
+async function withFallback<T>(fn: (ex: any) => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  while (currentExchangeIndex < EXCHANGE_PRIORITY.length) {
+    try {
+      return await fn(getExchange());
+    } catch (err) {
+      lastErr = err;
+      if (!isAvailabilityError(err)) throw err; // non-availability error — don't cascade
+      if (!advanceExchange(err)) break; // no more exchanges to try
+    }
+  }
+  throw lastErr;
 }
 
 function toOHLCV(raw: any[][]): OHLCV[] {
@@ -52,10 +93,8 @@ export async function fetchOHLCV(
   const cached = getCached(asset, timeframe);
   if (cached) return cached;
 
-  const ex = getExchange();
   logger.debug(`Fetching ${asset} ${timeframe} (${limit} candles)`);
-
-  const raw = await ex.fetchOHLCV(asset, timeframe, undefined, limit);
+  const raw = await withFallback<any[][]>((ex) => ex.fetchOHLCV(asset, timeframe, undefined, limit));
   const candles = toOHLCV(raw);
 
   checkStaleness(candles, timeframe);
@@ -80,8 +119,7 @@ export async function fetchMultiTimeframe(asset: Asset): Promise<MultiTimeframeD
 
 /** Fetch current mid-price without going through OHLCV */
 export async function fetchCurrentPrice(asset: Asset): Promise<number> {
-  const ex = getExchange();
-  const ticker = await ex.fetchTicker(asset);
+  const ticker = await withFallback<any>((ex) => ex.fetchTicker(asset));
   return ticker.last ?? ticker.close ?? 0;
 }
 

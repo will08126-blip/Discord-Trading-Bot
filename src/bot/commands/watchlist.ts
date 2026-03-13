@@ -5,11 +5,11 @@ import { buildWatchlistEmbed, buildSignalEmbed } from '../embeds';
 import { addPendingSignal, markSignalSent } from '../../signals/signalManager';
 
 const WATCHLIST: Asset[] = [
-  'BTC/USDT:USDT',
-  'ETH/USDT:USDT',
-  'SOL/USDT:USDT',
-  'XRP/USDT:USDT',
-  'PEPE/USDT:USDT',
+  'BTC/USDT',
+  'ETH/USDT',
+  'SOL/USDT',
+  'XRP/USDT',
+  'PEPE/USDT',
 ];
 
 export const data = new SlashCommandBuilder()

@@ -4,10 +4,9 @@ import { buildCheckSummaryEmbed, buildSignalEmbed } from '../embeds';
 
 function normalizeSymbol(input: string): string {
   const upper = input.toUpperCase().trim();
-  if (upper.includes(':')) return upper;            // already full format e.g. BTC/USDT:USDT
-  if (upper.includes('/')) return `${upper}:USDT`;  // BTC/USDT → BTC/USDT:USDT
-  const base = upper.replace(/USDT$/, '');           // strip trailing USDT if present
-  return `${base}/USDT:USDT`;
+  if (upper.includes('/')) return upper.split(':')[0]; // strip :USDT suffix if present → BTC/USDT
+  const base = upper.replace(/USDT$/, '');             // strip trailing USDT if present
+  return `${base}/USDT`;
 }
 
 export const data = new SlashCommandBuilder()
@@ -34,7 +33,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       .setTitle('⚠️ Scan Failed')
       .setDescription(
         `Could not fetch data for **${symbol}**.\n\n` +
-        `Make sure it is a valid Binance Futures perpetual (e.g. \`SOL\`, \`DOGE\`, \`BTC/USDT\`).\n\n` +
+        `Make sure it is a valid symbol available on spot markets (e.g. \`SOL\`, \`DOGE\`, \`BTC/USDT\`).\n\n` +
         `*Error: ${result.error}*`
       )
       .setTimestamp();
