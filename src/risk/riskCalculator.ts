@@ -5,13 +5,12 @@ export interface RiskParameters {
   entryPrice: number;
   stopLoss: number;
   takeProfit: number;
-  stopDistancePct: number;      // % distance from entry to SL
+  stopDistancePct: number;      // % distance from entry to SL (internal use only)
   rewardRiskRatio: number;
   suggestedLeverage: number;
   riskPct: number;              // % of your capital to risk (confidence-based)
   tradeType: TradeType;
-  // Reference table: estimated dollar risk at common capital sizes
-  referenceTable: { capital: number; riskDollars: number; positionSize: number }[];
+  deploymentScore: number;      // 0-100: how favourable conditions are to deploy capital
 }
 
 /**
@@ -27,8 +26,6 @@ const RISK_PCT: Record<string, Record<ScoreTier, number>> = {
   swing:  { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
 };
 
-const REFERENCE_CAPITALS = [500, 1000, 2500, 5000, 10000];
-
 function leverageCap(tier: ScoreTier, tradeType: TradeType): number {
   const typeKey = tradeType === 'SCALP' ? 'scalp' : tradeType === 'HYBRID' ? 'hybrid' : 'swing';
   const tiers = config.leverageTiers[typeKey];
@@ -39,6 +36,26 @@ function leverageCap(tier: ScoreTier, tradeType: TradeType): number {
     ? config.trading.maxLeverageHybrid
     : config.trading.maxLeverageSwing;
   return Math.min(byTier, hardCap);
+}
+
+/**
+ * Deployment confidence score (0-100).
+ * Measures how favourable the *environment* is to deploy capital right now,
+ * based on HTF alignment, momentum, volatility, regime, liquidity and session.
+ * Intentionally excludes setupQuality/slippageRisk/recentPerformance — those
+ * measure pattern quality (already captured in signal.score).
+ */
+export function calculateDeploymentScore(signal: StrategySignal): number {
+  const c = signal.components;
+  const raw =
+    c.htfAlignment +   // 0-20
+    c.momentum +       // 0-15
+    c.volatilityQuality + // 0-10
+    c.regimeFit +      // 0-10
+    c.liquidity +      // 0-10
+    c.sessionQuality;  // 0-5
+  // Max possible = 70; normalise to 0-100
+  return Math.round((raw / 70) * 100);
 }
 
 export function classifyTradeType(signal: StrategySignal): TradeType {
@@ -71,14 +88,7 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
   const maxLev = leverageCap(signal.tier, tradeType);
   const suggestedLeverage = Math.max(1, Math.min(maxLev, Math.ceil(impliedLeverage)));
 
-  // Reference table: show estimated risk dollars and position size at common capitals
-  const referenceTable = REFERENCE_CAPITALS.map((capital) => {
-    const riskDollars = Math.round(capital * (riskPct / 100));
-    const positionSize = stopDistancePct > 0
-      ? Math.round(riskDollars / stopDistancePct)
-      : 0;
-    return { capital, riskDollars, positionSize };
-  });
+  const deploymentScore = calculateDeploymentScore(signal);
 
   return {
     entryPrice,
@@ -89,7 +99,7 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
     suggestedLeverage,
     riskPct,
     tradeType,
-    referenceTable,
+    deploymentScore,
   };
 }
 

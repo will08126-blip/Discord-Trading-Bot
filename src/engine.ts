@@ -19,11 +19,12 @@ import {
   markSignalSent,
   updateDynamicSLTP,
   handleSLTPHit,
+  attemptMomentumTPExtension,
 } from './signals/signalManager';
 import { checkHardControls, getStrategyWeight } from './adaptation/adaptation';
 import {
   buildSignalEmbed,
-  buildSLTPUpdateEmbed,
+  buildTPUpdateEmbed,
   buildExitAlertEmbed,
   buildClosedTradeEmbed,
 } from './bot/embeds';
@@ -117,10 +118,9 @@ async function monitorActivePositions() {
       if (!channel?.isTextBased()) continue;
       const tc = channel as TextChannel;
 
-      // ── SL/TP hit ────────────────────────────────────────────────────────
-      if (update.hitSL || update.hitTP) {
-        const type = update.hitTP ? 'TP_HIT' : 'SL_HIT';
-        await tc.send(buildExitAlertEmbed(position, type, currentPrice));
+      // ── TP hit ───────────────────────────────────────────────────────────
+      if (update.hitTP) {
+        await tc.send(buildExitAlertEmbed(position, 'TP_HIT', currentPrice));
 
         const trade = handleSLTPHit(update);
         if (trade) {
@@ -129,13 +129,11 @@ async function monitorActivePositions() {
         continue;
       }
 
-      // ── SL/TP levels updated ─────────────────────────────────────────────
-      if (update.oldSL !== update.newSL || update.oldTP !== update.newTP) {
+      // ── TP level extended ────────────────────────────────────────────────
+      if (update.oldTP !== update.newTP) {
         await tc.send(
-          buildSLTPUpdateEmbed(
+          buildTPUpdateEmbed(
             position,
-            update.oldSL,
-            update.newSL,
             update.oldTP,
             update.newTP,
             currentPrice
@@ -143,16 +141,17 @@ async function monitorActivePositions() {
         );
       }
 
-      // ── Proximity alerts ─────────────────────────────────────────────────
-      const isLong = position.signal.direction === 'LONG';
-      const slDist = Math.abs(currentPrice - update.newSL) / currentPrice;
+      // ── TP proximity: try to extend before alerting ──────────────────────
       const tpDist = Math.abs(currentPrice - update.newTP) / currentPrice;
-
-      if (!position.exitAlertSent && slDist < 0.005) {
-        await tc.send(buildExitAlertEmbed(position, 'SL_APPROACH', currentPrice));
-        position.exitAlertSent = true;
-      } else if (tpDist < 0.003) {
-        await tc.send(buildExitAlertEmbed(position, 'TP_APPROACH', currentPrice));
+      if (tpDist < 0.003) {
+        const extension = attemptMomentumTPExtension(position, candles5m, currentPrice);
+        if (extension) {
+          // Momentum is strong — push TP out and let it run
+          await tc.send(buildTPUpdateEmbed(position, extension.oldTP, extension.newTP, currentPrice));
+        } else {
+          // Momentum is fading or cap reached — alert to consider taking profit
+          await tc.send(buildExitAlertEmbed(position, 'TP_APPROACH', currentPrice));
+        }
       }
     } catch (err) {
       logger.error(`Error monitoring position ${position.id}:`, err);
@@ -202,21 +201,33 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
       for (const strategy of strategies) {
         try {
           let signal = strategy.analyze(mtfData, regime.regime);
-          if (!signal) continue;
+          if (!signal) {
+            logger.info(`  ${strategy.name}: no setup detected`);
+            continue;
+          }
 
           // Fix asset on signals that use placeholder
           signal = { ...signal, asset };
 
           // Apply adaptation weight
           const weight = getStrategyWeight(strategy.name);
+          const preWeightScore = signal.score;
           signal = applyAdaptationWeight(signal, weight);
 
-          if (signal.tier === 'NO_TRADE') continue;
+          const weightNote = weight < 1.0
+            ? ` [weight=${weight.toFixed(2)}, score ${preWeightScore}→${signal.score}]`
+            : '';
+
+          if (signal.tier === 'NO_TRADE') {
+            logger.info(`  ${strategy.name}: score=${signal.score} NO_TRADE${weightNote} — filtered out`);
+            continue;
+          }
           if (isDuplicateSignal(signal)) {
-            logger.debug(`Duplicate signal suppressed: ${asset} ${signal.direction}`);
+            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed (10min window)`);
             continue;
           }
 
+          logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} ✓ queued`);
           newSignals.push(signal);
         } catch (err) {
           logger.error(`Strategy ${strategy.name} error for ${asset}:`, err);
@@ -228,7 +239,7 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
     const ranked = filterAndRankSignals(newSignals, config.trading.minScoreThreshold);
     const deduped = deduplicateSignals(ranked);
 
-    logger.info(`Scan complete: ${deduped.length} qualifying signals`);
+    logger.info(`Scan complete: ${newSignals.length} raw → ${ranked.length} ranked → ${deduped.length} posted`);
 
     for (const signal of deduped) {
       await postSignal(signal);

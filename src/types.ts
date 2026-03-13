@@ -73,12 +73,13 @@ export interface ActivePosition {
   confirmedAt: number;
   messageId: string;           // Discord message ID for edits
   channelId: string;
-  // Dynamic SL/TP tracking
-  currentStopLoss: number;     // may trail from original
+  // Dynamic TP tracking
+  currentStopLoss: number;     // original SL — kept for R-multiple calc, not monitored
   currentTakeProfit: number;   // may extend from original
-  highestPrice: number;        // for long trailing (peak since entry)
-  lowestPrice: number;         // for short trailing (trough since entry)
+  highestPrice: number;        // for long TP extension tracking (peak since entry)
+  lowestPrice: number;         // for short TP extension tracking (trough since entry)
   lastSLTPUpdateAt: number;    // timestamp of last adjustment
+  tpExtensionCount: number;    // momentum-based TP extensions used (max 2)
   exitAlertSent: boolean;
 }
 

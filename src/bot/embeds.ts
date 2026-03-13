@@ -17,6 +17,30 @@ function pct(price: number, reference: number): string {
   return `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`;
 }
 
+/**
+ * Renders a 10-dot emoji scale showing capital deployment confidence.
+ * Dot colour reflects conviction level; unfilled dots are shown as ⚪.
+ *
+ *   score ≥ 70 → 🟢  |  40–69 → 🟡  |  < 40 → 🔴
+ *
+ * Example (score 82):
+ *   🟢🟢🟢🟢🟢🟢🟢🟢🟡⚪  82/100
+ *   VERY HIGH — strong conditions to size up
+ */
+function buildDeploymentMeter(score: number): string {
+  const filled = Math.round(score / 10);
+  const dot = score >= 70 ? '🟢' : score >= 40 ? '🟡' : '🔴';
+  const dots = dot.repeat(filled) + '⚪'.repeat(10 - filled);
+
+  const label =
+    score >= 80 ? 'VERY HIGH — strong conditions to size up' :
+    score >= 60 ? 'HIGH — solid conditions' :
+    score >= 40 ? 'MODERATE — be selective with size' :
+                  'LOW — consider sitting this one out';
+
+  return `${dots}  ${score}/100\n${label}`;
+}
+
 // ─── Signal embed ─────────────────────────────────────────────────────────────
 
 export function buildSignalEmbed(signal: StrategySignal) {
@@ -39,17 +63,14 @@ export function buildSignalEmbed(signal: StrategySignal) {
         name: LINE,
         value: [
           `📍 **Entry Zone:**  ${formatPrice(signal.entryZone[0], asset)} – ${formatPrice(signal.entryZone[1], asset)}`,
-          `🛑 **Stop Loss:**  ${formatPrice(signal.stopLoss, asset)}  (${pct(signal.stopLoss, entry)})`,
           `🎯 **Take Profit:** ${formatPrice(signal.takeProfit, asset)}  (${pct(signal.takeProfit, entry)})`,
-          `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x  |  **SL dist:** ${(risk.stopDistancePct * 100).toFixed(2)}%`,
+          `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x`,
         ].join('\n'),
         inline: false,
       },
       {
-        name: `💰 Suggested Risk: ${risk.riskPct}% of your capital`,
-        value: risk.referenceTable
-          .map((r) => `$${r.capital.toLocaleString()} → risk **$${r.riskDollars}** (pos ~$${r.positionSize.toLocaleString()})`)
-          .join('\n'),
+        name: '💰 Capital Deployment Confidence',
+        value: buildDeploymentMeter(risk.deploymentScore),
         inline: false,
       },
       {
@@ -115,15 +136,12 @@ export function buildPositionEmbed(position: ActivePosition, currentPrice?: numb
       name: LINE,
       value: [
         `📍 **Entry:** ${formatPrice(position.entryPrice, asset)}`,
-        `🛑 **Current SL:** ${formatPrice(position.currentStopLoss, asset)}  ${
-          position.currentStopLoss !== position.signal.stopLoss ? '*(trailing)*' : ''
-        }`,
         `🎯 **Current TP:** ${formatPrice(position.currentTakeProfit, asset)}  ${
           position.currentTakeProfit !== position.signal.takeProfit ? '*(extended)*' : ''
         }`,
         priceLine,
         pnlLine,
-        `📐 **Leverage:** ${position.suggestedLeverage}x  |  **Risk:** ${position.riskPct}% of capital`,
+        `📐 **Leverage:** ${position.suggestedLeverage}x`,
         `⚡ **Type:** ${position.signal.tradeType}  |  **Strategy:** ${position.signal.strategy}`,
       ].filter(Boolean).join('\n'),
       inline: false,
@@ -146,18 +164,15 @@ export function buildPositionEmbed(position: ActivePosition, currentPrice?: numb
 
 export function buildExitAlertEmbed(
   position: ActivePosition,
-  type: 'SL_APPROACH' | 'TP_APPROACH' | 'SL_HIT' | 'TP_HIT',
+  type: 'TP_APPROACH' | 'TP_HIT',
   currentPrice: number,
-  newSL?: number,
   newTP?: number
 ) {
   const asset = position.signal.asset.split('/')[0];
   const isLong = position.signal.direction === 'LONG';
 
   const labels: Record<string, { emoji: string; title: string; color: number; desc: string }> = {
-    SL_APPROACH: { emoji: '⚠️', title: 'SL APPROACHING', color: 0xffa500, desc: 'Your stop loss level is close. Be ready to exit.' },
     TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING', color: 0x00ccff, desc: 'Price is near your take profit. Consider locking in gains.' },
-    SL_HIT:      { emoji: '🛑', title: 'STOP LOSS HIT', color: 0xff0000, desc: 'Your stop loss has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
     TP_HIT:      { emoji: '🎯', title: 'TAKE PROFIT HIT', color: 0x00ff00, desc: 'Your take profit has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
   };
 
@@ -175,7 +190,6 @@ export function buildExitAlertEmbed(
       value: [
         `💹 **Current Price:** ${formatPrice(currentPrice, asset)}`,
         `📍 **Entry:** ${formatPrice(position.entryPrice, asset)}`,
-        newSL ? `🛑 **SL (updated):** ${formatPrice(newSL, asset)}` : `🛑 **SL:** ${formatPrice(position.currentStopLoss, asset)}`,
         newTP ? `🎯 **TP (updated):** ${formatPrice(newTP, asset)}` : `🎯 **TP:** ${formatPrice(position.currentTakeProfit, asset)}`,
         `📊 **Unrealised P&L:** ${pnlPct >= 0 ? '+' : ''}${(pnlPct * 100).toFixed(2)}%`,
       ].filter(Boolean).join('\n'),
@@ -195,12 +209,10 @@ export function buildExitAlertEmbed(
   return { embeds: [embed], components: [closeRow] };
 }
 
-// ─── SL/TP update embed ───────────────────────────────────────────────────────
+// ─── TP update embed ──────────────────────────────────────────────────────────
 
-export function buildSLTPUpdateEmbed(
+export function buildTPUpdateEmbed(
   position: ActivePosition,
-  oldSL: number,
-  newSL: number,
   oldTP: number,
   newTP: number,
   currentPrice: number
@@ -208,14 +220,13 @@ export function buildSLTPUpdateEmbed(
   const asset = position.signal.asset.split('/')[0];
   const embed = new EmbedBuilder()
     .setColor(0x8888ff)
-    .setTitle(`🔄 ${asset} ${position.signal.direction} — SL/TP Updated`)
+    .setTitle(`🔄 ${asset} ${position.signal.direction} — Take Profit Extended`)
     .addFields({
       name: 'Level Changes',
       value: [
-        oldSL !== newSL ? `🛑 SL: ${formatPrice(oldSL, asset)} → **${formatPrice(newSL, asset)}**` : '',
-        oldTP !== newTP ? `🎯 TP: ${formatPrice(oldTP, asset)} → **${formatPrice(newTP, asset)}**` : '',
+        `🎯 TP: ${formatPrice(oldTP, asset)} → **${formatPrice(newTP, asset)}**`,
         `💹 Current: ${formatPrice(currentPrice, asset)}`,
-      ].filter(Boolean).join('\n'),
+      ].join('\n'),
       inline: false,
     })
     .setTimestamp()
