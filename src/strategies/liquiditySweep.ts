@@ -210,7 +210,7 @@ export class LiquiditySweepStrategy extends BaseStrategy {
         return {
           id: uuidv4(),
           strategy: this.name,
-          asset: 'BTC/USDT:USDT', // placeholder — overwritten by caller
+          asset: 'BTC/USDT', // placeholder — overwritten by caller
           direction: isBullReversal ? 'LONG' : 'SHORT',
           tradeType,
           entryZone,

@@ -20,7 +20,7 @@ function pct(price: number, reference: number): string {
 
 export function buildSignalEmbed(signal: StrategySignal) {
   const risk = calculateRisk(signal);
-  const asset = signal.asset.replace('/USDT:USDT', '');
+  const asset = signal.asset.split('/')[0];
   const entry = risk.entryPrice;
 
   const title = `${tierEmoji(signal.tier)} ${signal.tier} ${signal.direction}  —  ${asset}/USDT`;
@@ -89,7 +89,7 @@ export function buildSignalEmbed(signal: StrategySignal) {
 // ─── Position tracking embed ──────────────────────────────────────────────────
 
 export function buildPositionEmbed(position: ActivePosition, currentPrice?: number) {
-  const asset = position.signal.asset.replace('/USDT:USDT', '');
+  const asset = position.signal.asset.split('/')[0];
   const isLong = position.signal.direction === 'LONG';
 
   const unrealizedPnlPct = currentPrice
@@ -141,7 +141,7 @@ export function buildExitAlertEmbed(
   newSL?: number,
   newTP?: number
 ) {
-  const asset = position.signal.asset.replace('/USDT:USDT', '');
+  const asset = position.signal.asset.split('/')[0];
   const isLong = position.signal.direction === 'LONG';
 
   const labels: Record<string, { emoji: string; title: string; color: number }> = {
@@ -188,7 +188,7 @@ export function buildSLTPUpdateEmbed(
   newTP: number,
   currentPrice: number
 ) {
-  const asset = position.signal.asset.replace('/USDT:USDT', '');
+  const asset = position.signal.asset.split('/')[0];
   const embed = new EmbedBuilder()
     .setColor(0x8888ff)
     .setTitle(`🔄 ${asset} ${position.signal.direction} — SL/TP Updated`)
@@ -210,7 +210,7 @@ export function buildSLTPUpdateEmbed(
 // ─── /check summary embed ─────────────────────────────────────────────────────
 
 export function buildCheckSummaryEmbed(result: SingleAssetScanResult) {
-  const assetLabel = result.asset.replace('/USDT:USDT', '');
+  const assetLabel = result.asset.split('/')[0];
   const regimeStr = result.regime ? regimeLabel(result.regime.regime) : 'Unknown';
   const adxStr = result.regime ? ` (ADX: ${result.regime.adx.toFixed(1)}, ATR×: ${result.regime.atrRatio.toFixed(2)})` : '';
 
@@ -245,7 +245,7 @@ export function buildCheckSummaryEmbed(result: SingleAssetScanResult) {
 
 export function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive = false) {
   const lines = results.map((result) => {
-    const assetLabel = result.asset.replace('/USDT:USDT', '');
+    const assetLabel = result.asset.split('/')[0];
 
     if (result.error) {
       return `**${assetLabel}** — ⚠️ fetch error`;
@@ -287,7 +287,7 @@ export function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive = f
 // ─── Closed trade embed ────────────────────────────────────────────────────────
 
 export function buildClosedTradeEmbed(trade: ClosedTrade) {
-  const asset = trade.signal.asset.replace('/USDT:USDT', '');
+  const asset = trade.signal.asset.split('/')[0];
   const isWin = trade.pnlDollar > 0; // pnlDollar stores R-multiple
   const rMultiple = trade.pnlDollar;
   const pnlStr = `${(trade.pnlPct * 100).toFixed(2)}%  (${rMultiple >= 0 ? '+' : ''}${rMultiple.toFixed(2)}R)`;

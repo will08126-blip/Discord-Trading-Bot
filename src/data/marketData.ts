@@ -8,9 +8,9 @@ import { logger } from '../utils/logger';
 const TIMEFRAMES: Timeframe[] = ['4h', '15m', '5m', '1m'];
 const CANDLE_LIMIT = 200; // enough for all indicators
 
-// Priority order: best global availability first, Binance last as last resort.
-// binanceusdm returns HTTP 451 in geo-restricted regions (e.g. US).
-const EXCHANGE_PRIORITY = ['bybit', 'okx', 'gate', 'binanceusdm'];
+// Spot exchanges only — no geo-restricted futures endpoints.
+// All three support BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, PEPE/USDT with no API key.
+const EXCHANGE_PRIORITY = ['binance', 'gate', 'mexc'];
 
 function resolveStartIndex(): number {
   const id = config.engine.exchangeId;
@@ -28,7 +28,6 @@ function getExchange(): any {
     exchange = new ccxt[id]({
       enableRateLimit: true,
       timeout: 10000, // 10 s — fail fast rather than hanging indefinitely
-      options: { defaultType: 'future' },
     });
   }
   return exchange;
