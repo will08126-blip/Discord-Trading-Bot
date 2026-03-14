@@ -141,6 +141,8 @@ function swingPoints(candles, leftBars = 3, rightBars = 3, maxPoints = 10) {
 // ─── Volume helpers ──────────────────────────────────────────────────────────
 function volumeAverage(candles, lookback = 20) {
     const vols = volumes(candles).slice(-lookback);
+    if (vols.length === 0)
+        return 0;
     return vols.reduce((a, b) => a + b, 0) / vols.length;
 }
 /** Returns true if the last candle's volume is above the average by ratio */
