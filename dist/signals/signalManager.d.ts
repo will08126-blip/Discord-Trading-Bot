@@ -1,4 +1,6 @@
 import type { StrategySignal, ActivePosition, ClosedTrade, OHLCV } from '../types';
+/** Load positions saved from a previous session. Call once at startup. */
+export declare function loadPositions(): void;
 export declare function addPendingSignal(signal: StrategySignal): void;
 export declare function getPendingSignal(id: string): StrategySignal | undefined;
 export declare function getAllPendingSignals(): StrategySignal[];

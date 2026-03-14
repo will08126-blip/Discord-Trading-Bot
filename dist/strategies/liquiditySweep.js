@@ -87,13 +87,15 @@ class LiquiditySweepStrategy extends base_1.BaseStrategy {
                 const wickRatio = bodySize > 0 ? wickSize / bodySize : 0;
                 // Build signal
                 const entryMid = lastCandle5m.close;
+                // SL: behind the sweep wick with wider buffer (0.7×ATR) — wicks can extend on sweeps
                 const stopLoss = isBullReversal
-                    ? c.low - lastAtr5m * 0.3
-                    : c.high + lastAtr5m * 0.3;
+                    ? c.low - lastAtr5m * 0.7
+                    : c.high + lastAtr5m * 0.7;
                 const stopDistance = Math.abs(entryMid - stopLoss);
+                // TP: 2.5:1 R:R — liquidity sweeps are reversals; more conservative than trend trades
                 const takeProfit = isBullReversal
-                    ? entryMid + stopDistance * 2.0
-                    : entryMid - stopDistance * 2.0;
+                    ? entryMid + stopDistance * 2.5
+                    : entryMid - stopDistance * 2.5;
                 const entryZone = isBullReversal
                     ? [entryMid - lastAtr5m * 0.1, entryMid + lastAtr5m * 0.2]
                     : [entryMid - lastAtr5m * 0.2, entryMid + lastAtr5m * 0.1];
@@ -129,8 +131,11 @@ class LiquiditySweepStrategy extends base_1.BaseStrategy {
                 const tier = score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
                 if (tier === 'NO_TRADE')
                     continue;
-                const stopPct = Math.abs(entryZone[0] - stopLoss) / entryZone[0];
+                const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
                 const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+                // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
+                if (tradeType === 'SCALP' && (0, indicators_1.sessionQualityScore)() <= 2)
+                    continue;
                 return {
                     id: (0, uuid_1.v4)(),
                     strategy: this.name,

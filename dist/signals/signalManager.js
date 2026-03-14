@@ -1,5 +1,9 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.loadPositions = loadPositions;
 exports.addPendingSignal = addPendingSignal;
 exports.getPendingSignal = getPendingSignal;
 exports.getAllPendingSignals = getAllPendingSignals;
@@ -14,6 +18,8 @@ exports.evaluateMomentumForExtension = evaluateMomentumForExtension;
 exports.attemptMomentumTPExtension = attemptMomentumTPExtension;
 exports.isDuplicateSignal = isDuplicateSignal;
 exports.markSignalSent = markSignalSent;
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
 const riskCalculator_1 = require("../risk/riskCalculator");
 const tracker_1 = require("../performance/tracker");
 const adaptation_1 = require("../adaptation/adaptation");
@@ -24,6 +30,32 @@ const logger_1 = require("../utils/logger");
 const pendingSignals = new Map(); // posted, awaiting confirmation
 const activePositions = new Map(); // confirmed, being tracked
 const recentlySentAssets = new Map(); // for duplicate suppression
+// ─── Position persistence ──────────────────────────────────────────────────────
+const POSITIONS_FILE = path_1.default.join(config_1.config.paths.data, 'positions.json');
+function savePositions() {
+    try {
+        fs_1.default.mkdirSync(path_1.default.dirname(POSITIONS_FILE), { recursive: true });
+        fs_1.default.writeFileSync(POSITIONS_FILE, JSON.stringify([...activePositions.values()], null, 2));
+    }
+    catch (err) {
+        logger_1.logger.error('Failed to save active positions to disk:', err);
+    }
+}
+/** Load positions saved from a previous session. Call once at startup. */
+function loadPositions() {
+    if (!fs_1.default.existsSync(POSITIONS_FILE))
+        return;
+    try {
+        const raw = fs_1.default.readFileSync(POSITIONS_FILE, 'utf-8');
+        const data = JSON.parse(raw);
+        for (const p of data)
+            activePositions.set(p.id, p);
+        logger_1.logger.info(`Restored ${data.length} active position(s) from disk`);
+    }
+    catch (err) {
+        logger_1.logger.warn('Failed to load saved positions — starting fresh:', err);
+    }
+}
 // ─── Signal lifecycle ─────────────────────────────────────────────────────────
 function addPendingSignal(signal) {
     pendingSignals.set(signal.id, signal);
@@ -84,6 +116,7 @@ function confirmEntry(signalId, entryPrice, messageId, channelId) {
     };
     activePositions.set(signalId, position);
     pendingSignals.delete(signalId);
+    savePositions();
     logger_1.logger.info(`Position confirmed: ${signal.asset} ${signal.direction} @ ${entryPrice}`);
     return position;
 }
@@ -122,6 +155,7 @@ function closePosition(positionId, exitPrice, reason) {
         exitReason: reason,
     };
     activePositions.delete(positionId);
+    savePositions();
     (0, tracker_1.addTrade)(trade);
     (0, adaptation_1.onTradeClosed)(trade);
     logger_1.logger.info(`Trade closed: ${position.signal.asset} ${position.signal.direction} ` +

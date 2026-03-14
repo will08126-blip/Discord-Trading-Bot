@@ -17,7 +17,11 @@ export interface BollingerResult {
     width: number[];
 }
 export declare function bollinger(candles: OHLCV[], period?: number, stdDev?: number): BollingerResult;
-/** Minimum Bollinger width over the last `lookback` candles (squeeze detector) */
+/**
+ * Minimum Bollinger width over the last `lookback` candles (squeeze detector).
+ * Returns Infinity when there is insufficient valid data (< 75% of lookback),
+ * which callers should treat as "no squeeze data available".
+ */
 export declare function bollingerWidthMin(width: number[], lookback?: number): number;
 export declare function vwap(candles: OHLCV[]): number[];
 export interface SwingPoint {
@@ -39,10 +43,17 @@ export declare function isBearishEngulfing(candles: OHLCV[]): boolean;
 export declare function isBullishPin(candle: OHLCV): boolean;
 export declare function isBearishPin(candle: OHLCV): boolean;
 /**
- * Simple bullish divergence: price makes lower low but RSI makes higher low.
- * Checks last two swing lows against RSI at those points.
+ * Bullish divergence: most-recent swing low is lower in price but higher in RSI
+ * than the previous swing low (candles 10–20 back).
+ *
+ * Two-pass approach avoids the backward-iteration bug where the algorithm
+ * could never set prevLow when the most-recent candles hold the new low.
  */
 export declare function hasBullishDivergence(candles: OHLCV[], rsiValues: number[]): boolean;
+/**
+ * Bearish divergence: most-recent swing high is higher in price but lower in RSI
+ * than the previous swing high (candles 10–20 back).
+ */
 export declare function hasBearishDivergence(candles: OHLCV[], rsiValues: number[]): boolean;
 /**
  * Returns a session quality score (0-5).

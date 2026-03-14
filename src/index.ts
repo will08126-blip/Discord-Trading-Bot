@@ -3,6 +3,7 @@ import { discordClient } from './bot/client';
 import { onReady } from './bot/events/ready';
 import { onInteractionCreate } from './bot/events/interactionCreate';
 import { startScheduler, runScanCycle } from './engine';
+import { loadPositions } from './signals/signalManager';
 import { config } from './config';
 import { logger } from './utils/logger';
 
@@ -21,6 +22,9 @@ process.on('uncaughtException', (err: Error) => {
 
 async function main() {
   logger.info('Starting Discord Trading Bot...');
+
+  // Restore active positions from the previous session before anything else
+  loadPositions();
 
   // Register Discord event handlers
   discordClient.once(Events.ClientReady, async (client) => {
