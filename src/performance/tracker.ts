@@ -31,7 +31,9 @@ export function loadTrades(): ClosedTrade[] {
 
 export function saveTrades(trades: ClosedTrade[]): void {
   ensureDataDir();
-  fs.writeFileSync(config.paths.tradesFile, JSON.stringify(trades, null, 2));
+  const tmp = config.paths.tradesFile + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(trades, null, 2));
+  fs.renameSync(tmp, config.paths.tradesFile);
 }
 
 export function addTrade(trade: ClosedTrade): void {

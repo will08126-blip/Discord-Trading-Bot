@@ -50,6 +50,8 @@ function advanceExchange(err: unknown): boolean {
 }
 
 async function withFallback<T>(fn: (ex: any) => Promise<T>): Promise<T> {
+  currentExchangeIndex = resolveStartIndex(); // reset so each call starts from the preferred exchange
+  exchange = null;                            // discard any stale instance from a previous failure
   let lastErr: unknown;
   while (currentExchangeIndex < EXCHANGE_PRIORITY.length) {
     try {

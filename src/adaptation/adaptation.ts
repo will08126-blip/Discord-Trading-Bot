@@ -43,7 +43,9 @@ export function loadState(): BotState {
 
 export function saveState(state: BotState): void {
   ensureDataDir();
-  fs.writeFileSync(config.paths.stateFile, JSON.stringify(state, null, 2));
+  const tmp = config.paths.stateFile + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, config.paths.stateFile);
 }
 
 // ─── Adaptation logic ─────────────────────────────────────────────────────────
