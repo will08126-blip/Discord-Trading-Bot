@@ -32,10 +32,11 @@ class VolatilityExpansionStrategy extends base_1.BaseStrategy {
         // ── Confirm squeeze exists on 15m or 4h ────────────────────────────────
         const currentWidth15m = bb15m.width[n15];
         const minWidth15m = (0, indicators_1.bollingerWidthMin)(bb15m.width, 20);
-        const isSqueeze15m = !isNaN(currentWidth15m) && currentWidth15m <= minWidth15m * 1.1;
+        // Guard: Infinity means insufficient BB history — don't treat as squeeze
+        const isSqueeze15m = !isNaN(currentWidth15m) && isFinite(minWidth15m) && currentWidth15m <= minWidth15m * 1.1;
         const currentWidth4h = bb4h.width[n4h];
         const minWidth4h = (0, indicators_1.bollingerWidthMin)(bb4h.width, 20);
-        const isSqueeze4h = !isNaN(currentWidth4h) && currentWidth4h <= minWidth4h * 1.1;
+        const isSqueeze4h = !isNaN(currentWidth4h) && isFinite(minWidth4h) && currentWidth4h <= minWidth4h * 1.1;
         if (!isSqueeze15m && !isSqueeze4h)
             return null;
         // ── Detect expansion: close outside Bollinger on 15m ──────────────────
@@ -72,14 +73,15 @@ class VolatilityExpansionStrategy extends base_1.BaseStrategy {
         const n5 = candles5m.length - 1;
         const lastCandle5m = candles5m[n5];
         const entryMid = lastCandle5m.close;
-        // SL: back inside the Bollinger band
+        // SL: back inside the Bollinger band with 0.5×ATR buffer
         const stopLoss = isLong
-            ? lowerBand15m - lastAtr15m * 0.2
-            : upperBand15m + lastAtr15m * 0.2;
+            ? lowerBand15m - lastAtr15m * 0.5
+            : upperBand15m + lastAtr15m * 0.5;
         const stopDistance = Math.abs(entryMid - stopLoss);
+        // TP: 3.5:1 R:R — expansion moves carry the most momentum and run furthest
         const takeProfit = isLong
-            ? entryMid + stopDistance * 3.0 // wider TP for expansion moves
-            : entryMid - stopDistance * 3.0;
+            ? entryMid + stopDistance * 3.5
+            : entryMid - stopDistance * 3.5;
         const entryZone = [
             entryMid - lastAtr5m * 0.15,
             entryMid + lastAtr5m * 0.15,
@@ -114,8 +116,11 @@ class VolatilityExpansionStrategy extends base_1.BaseStrategy {
         const tier = score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
         if (tier === 'NO_TRADE')
             return null;
-        const stopPct = Math.abs(entryZone[0] - stopLoss) / entryZone[0];
+        const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
         const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+        // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
+        if (tradeType === 'SCALP' && (0, indicators_1.sessionQualityScore)() <= 2)
+            return null;
         return {
             id: (0, uuid_1.v4)(),
             strategy: this.name,

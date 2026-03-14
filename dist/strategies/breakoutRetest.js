@@ -72,15 +72,16 @@ class BreakoutRetestStrategy extends base_1.BaseStrategy {
             const isLong = retestConfirmLong;
             // How many times has this level been retested? (first retest is better)
             const retestCount = this.countRetests(candles15m, level, 0.003);
-            // SL: beyond the retest candle's wick + ATR buffer
+            // SL: beyond the retest candle's wick + wider ATR buffer (0.8×) to absorb wick sweeps
             const stopLoss = isLong
-                ? Math.min(lastCandle5m.low, prevCandle5m.low) - lastAtr5m * 0.3
-                : Math.max(lastCandle5m.high, prevCandle5m.high) + lastAtr5m * 0.3;
+                ? Math.min(lastCandle5m.low, prevCandle5m.low) - lastAtr5m * 0.8
+                : Math.max(lastCandle5m.high, prevCandle5m.high) + lastAtr5m * 0.8;
             const entryMid = lastCandle5m.close;
             const stopDistance = Math.abs(entryMid - stopLoss);
+            // TP: 3.0:1 R:R — breakout retests can trend strongly after confirming
             const takeProfit = isLong
-                ? entryMid + stopDistance * 2.5
-                : entryMid - stopDistance * 2.5;
+                ? entryMid + stopDistance * 3.0
+                : entryMid - stopDistance * 3.0;
             const entryLow = isLong ? level - lastAtr5m * 0.1 : entryMid - lastAtr5m * 0.2;
             const entryHigh = isLong ? entryMid + lastAtr5m * 0.1 : level + lastAtr5m * 0.1;
             // ── Scoring ───────────────────────────────────────────────────────
@@ -101,11 +102,11 @@ class BreakoutRetestStrategy extends base_1.BaseStrategy {
             components.volatilityQuality = atrRatio < 1.8 ? 8 : 4;
             // Regime fit
             components.regimeFit = regime === 'TREND_UP' || regime === 'TREND_DOWN' ? 10 : 7;
-            // Volume on break candle
+            // Volume on break candle — require 2.0× average for full score (real breakouts need conviction)
             const breakIdx = candles15m.indexOf(breakCandle);
             const volAtBreak = candles15m[breakIdx].volume;
             const avgVol = candles15m.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
-            components.liquidity = volAtBreak > avgVol * 1.5 ? 10 : 5;
+            components.liquidity = volAtBreak > avgVol * 2.0 ? 10 : volAtBreak > avgVol * 1.5 ? 6 : 3;
             // Slippage
             components.slippageRisk = lastAtr15m < avgAtr5m * 3 ? 5 : 3;
             // Session
@@ -118,6 +119,9 @@ class BreakoutRetestStrategy extends base_1.BaseStrategy {
                 continue;
             const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
             const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+            // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
+            if (tradeType === 'SCALP' && (0, indicators_1.sessionQualityScore)() <= 2)
+                continue;
             return {
                 id: (0, uuid_1.v4)(),
                 strategy: this.name,

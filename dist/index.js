@@ -5,6 +5,7 @@ const client_1 = require("./bot/client");
 const ready_1 = require("./bot/events/ready");
 const interactionCreate_1 = require("./bot/events/interactionCreate");
 const engine_1 = require("./engine");
+const signalManager_1 = require("./signals/signalManager");
 const config_1 = require("./config");
 const logger_1 = require("./utils/logger");
 // ─── Global error guards ──────────────────────────────────────────────────────
@@ -19,6 +20,8 @@ process.on('uncaughtException', (err) => {
 });
 async function main() {
     logger_1.logger.info('Starting Discord Trading Bot...');
+    // Restore active positions from the previous session before anything else
+    (0, signalManager_1.loadPositions)();
     // Register Discord event handlers
     client_1.discordClient.once(discord_js_1.Events.ClientReady, async (client) => {
         await (0, ready_1.onReady)(client);

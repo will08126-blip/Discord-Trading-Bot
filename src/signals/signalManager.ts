@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import type { StrategySignal, ActivePosition, ClosedTrade, ExitReason, OHLCV } from '../types';
 import { calculateRisk } from '../risk/riskCalculator';
 import { addTrade } from '../performance/tracker';
@@ -10,6 +12,32 @@ import { logger } from '../utils/logger';
 const pendingSignals = new Map<string, StrategySignal>();    // posted, awaiting confirmation
 const activePositions = new Map<string, ActivePosition>();   // confirmed, being tracked
 const recentlySentAssets = new Map<string, number>();        // for duplicate suppression
+
+// ─── Position persistence ──────────────────────────────────────────────────────
+
+const POSITIONS_FILE = path.join(config.paths.data, 'positions.json');
+
+function savePositions(): void {
+  try {
+    fs.mkdirSync(path.dirname(POSITIONS_FILE), { recursive: true });
+    fs.writeFileSync(POSITIONS_FILE, JSON.stringify([...activePositions.values()], null, 2));
+  } catch (err) {
+    logger.error('Failed to save active positions to disk:', err);
+  }
+}
+
+/** Load positions saved from a previous session. Call once at startup. */
+export function loadPositions(): void {
+  if (!fs.existsSync(POSITIONS_FILE)) return;
+  try {
+    const raw = fs.readFileSync(POSITIONS_FILE, 'utf-8');
+    const data: ActivePosition[] = JSON.parse(raw);
+    for (const p of data) activePositions.set(p.id, p);
+    logger.info(`Restored ${data.length} active position(s) from disk`);
+  } catch (err) {
+    logger.warn('Failed to load saved positions — starting fresh:', err);
+  }
+}
 
 // ─── Signal lifecycle ─────────────────────────────────────────────────────────
 
@@ -87,6 +115,7 @@ export function confirmEntry(
 
   activePositions.set(signalId, position);
   pendingSignals.delete(signalId);
+  savePositions();
   logger.info(`Position confirmed: ${signal.asset} ${signal.direction} @ ${entryPrice}`);
   return position;
 }
@@ -139,6 +168,7 @@ function closePosition(
   };
 
   activePositions.delete(positionId);
+  savePositions();
   addTrade(trade);
   onTradeClosed(trade);
 

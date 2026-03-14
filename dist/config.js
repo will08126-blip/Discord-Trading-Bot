@@ -33,7 +33,7 @@ exports.config = {
         // No fixed capital — sizing is confidence-based (% of whatever you allocate)
         maxOpenPositions: Number(optionalEnv('MAX_OPEN_POSITIONS', '3')),
         maxDailyLoss: Number(optionalEnv('MAX_DAILY_LOSS', '150')),
-        minScoreThreshold: Number(optionalEnv('MIN_SCORE_THRESHOLD', '40')),
+        minScoreThreshold: Number(optionalEnv('MIN_SCORE_THRESHOLD', '60')),
         // Hard leverage caps per trade type
         maxLeverageScalp: Number(optionalEnv('MAX_LEVERAGE_SCALP', '50')),
         maxLeverageHybrid: Number(optionalEnv('MAX_LEVERAGE_HYBRID', '30')),
@@ -51,7 +51,7 @@ exports.config = {
         enabled: optionalEnv('ENABLED', 'true') === 'true',
         exchangeId: optionalEnv('EXCHANGE_ID', 'binance'),
         // Duplicate signal suppression window per strategy+asset+direction (ms)
-        duplicateWindowMs: 10 * 60 * 1000,
+        duplicateWindowMs: 30 * 60 * 1000,
         // Stale data thresholds per timeframe (ms) — 2× the candle size
         staleThresholds: {
             '4h': 2 * 4 * 60 * 60 * 1000,
