@@ -118,6 +118,8 @@ async function onInteractionCreate(interaction) {
     // ── Modal submissions ──────────────────────────────────────────────────────
     if (interaction.isModalSubmit()) {
         const colonIdx = interaction.customId.indexOf(':');
+        if (colonIdx === -1)
+            return; // malformed customId — ignore
         const modalAction = interaction.customId.slice(0, colonIdx);
         const positionId = interaction.customId.slice(colonIdx + 1);
         if (modalAction === 'closeModal') {

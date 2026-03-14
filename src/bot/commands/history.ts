@@ -15,6 +15,7 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const count = interaction.options.getInteger('count') ?? 5;
+  await interaction.deferReply({ ephemeral: true });
   const trades = loadTrades().slice(-count).reverse();
 
   const embed = new EmbedBuilder()
@@ -24,7 +25,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   if (trades.length === 0) {
     embed.setDescription('_No closed trades yet._');
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.editReply({ embeds: [embed] });
     return;
   }
 
@@ -35,7 +36,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return `**${t.signal.asset}** ${dir} | ${t.signal.strategy} | ${rStr} | ${t.exitReason} | ${date}`;
   });
 
-  embed.setDescription(lines.join('\n'));
+  // Truncate to Discord's 4096-char description limit
+  const desc = lines.join('\n');
+  embed.setDescription(desc.length > 4096 ? desc.slice(0, 4093) + '…' : desc);
 
-  await interaction.reply({ embeds: [embed], ephemeral: false });
+  await interaction.editReply({ embeds: [embed] });
 }

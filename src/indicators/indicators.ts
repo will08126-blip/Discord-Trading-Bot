@@ -180,6 +180,7 @@ export function swingPoints(
 
 export function volumeAverage(candles: OHLCV[], lookback = 20): number {
   const vols = volumes(candles).slice(-lookback);
+  if (vols.length === 0) return 0;
   return vols.reduce((a, b) => a + b, 0) / vols.length;
 }
 
