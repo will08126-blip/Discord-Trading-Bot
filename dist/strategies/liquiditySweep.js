@@ -1,0 +1,156 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.LiquiditySweepStrategy = void 0;
+const uuid_1 = require("uuid");
+const base_1 = require("./base");
+const indicators_1 = require("../indicators/indicators");
+/**
+ * Liquidity Sweep Reversal Strategy
+ *
+ * Logic:
+ *  - Detect swing highs/lows on 15m (last 20 candles)
+ *  - Sweep: wick extends beyond swing by > 0.2%, body closes back inside range
+ *  - Confirmation: RSI divergence or engulfing reversal candle
+ *
+ * Suitable for: RANGE, TREND_UP (end), TREND_DOWN (end)
+ */
+class LiquiditySweepStrategy extends base_1.BaseStrategy {
+    name = 'Liquidity Sweep';
+    supportedRegimes = ['RANGE', 'TREND_UP', 'TREND_DOWN'];
+    analyze(data, regime) {
+        if (!this.isRegimeSupported(regime))
+            return null;
+        const candles15m = data['15m'];
+        const candles5m = data['5m'];
+        if (candles15m.length < 30 || candles5m.length < 20)
+            return null;
+        const atrVals15m = (0, indicators_1.atr)(candles15m, 14);
+        const lastAtr15m = atrVals15m[candles15m.length - 1];
+        const avgAtr15m = (0, indicators_1.atrAverage)(atrVals15m, 14);
+        const atrVals5m = (0, indicators_1.atr)(candles5m, 14);
+        const lastAtr5m = atrVals5m[candles5m.length - 1];
+        const avgAtr5m = (0, indicators_1.atrAverage)(atrVals5m, 14);
+        const rsiVals15m = (0, indicators_1.rsi)(candles15m, 14);
+        const rsiVals5m = (0, indicators_1.rsi)(candles5m, 14);
+        // ── Find swing highs/lows on 15m (last 20 candles) ─────────────────────
+        const swings = (0, indicators_1.swingPoints)(candles15m.slice(-20), 3, 3, 10);
+        // ── Look at the last 3 candles on 15m for a sweep ──────────────────────
+        const n15 = candles15m.length - 1;
+        // Check for bearish sweep (sweep HIGH → bullish reversal)
+        const recentHighSwings = swings.filter((s) => s.type === 'HIGH');
+        const recentLowSwings = swings.filter((s) => s.type === 'LOW');
+        // Bullish reversal signal: sweep of lows then bounce up
+        const bullSignal = this.checkSweepReversal(candles15m, candles5m, rsiVals15m, recentLowSwings.map((s) => s.price), lastAtr15m, lastAtr5m, avgAtr5m, true, regime);
+        if (bullSignal)
+            return { ...bullSignal, asset: data.asset };
+        // Bearish reversal signal: sweep of highs then drop
+        const bearSignal = this.checkSweepReversal(candles15m, candles5m, rsiVals15m, recentHighSwings.map((s) => s.price), lastAtr15m, lastAtr5m, avgAtr5m, false, regime);
+        if (bearSignal)
+            return { ...bearSignal, asset: data.asset };
+        return null;
+    }
+    checkSweepReversal(candles15m, candles5m, rsiVals15m, swingPrices, lastAtr15m, lastAtr5m, avgAtr5m, isBullReversal, regime) {
+        const n15 = candles15m.length - 1;
+        for (const swingLevel of swingPrices) {
+            // Check last 2 candles on 15m for sweep
+            for (let i = n15; i >= n15 - 2; i--) {
+                if (i < 0)
+                    break;
+                const c = candles15m[i];
+                const sweepThreshold = swingLevel * 0.002; // 0.2%
+                // Bullish reversal: wick below swing low, body closes above
+                const isSweepBull = isBullReversal &&
+                    c.low < swingLevel - sweepThreshold &&
+                    c.close > swingLevel;
+                // Bearish reversal: wick above swing high, body closes below
+                const isSweepBear = !isBullReversal &&
+                    c.high > swingLevel + sweepThreshold &&
+                    c.close < swingLevel;
+                if (!isSweepBull && !isSweepBear)
+                    continue;
+                // Confirmation on 5m
+                const n5 = candles5m.length - 1;
+                const lastCandle5m = candles5m[n5];
+                const rsiVals5m = (0, indicators_1.rsi)(candles5m, 14);
+                const confirmed = isBullReversal
+                    ? (0, indicators_1.isBullishEngulfing)(candles5m.slice(-3)) ||
+                        (0, indicators_1.hasBullishDivergence)(candles5m.slice(-20), rsiVals5m.slice(-20))
+                    : (0, indicators_1.isBearishEngulfing)(candles5m.slice(-3)) ||
+                        (0, indicators_1.hasBearishDivergence)(candles5m.slice(-20), rsiVals5m.slice(-20));
+                if (!confirmed)
+                    continue;
+                // Strong wick ratio
+                const wickSize = isBullReversal
+                    ? swingLevel - c.low
+                    : c.high - swingLevel;
+                const bodySize = Math.abs(c.close - c.open);
+                const wickRatio = bodySize > 0 ? wickSize / bodySize : 0;
+                // Build signal
+                const entryMid = lastCandle5m.close;
+                const stopLoss = isBullReversal
+                    ? c.low - lastAtr5m * 0.3
+                    : c.high + lastAtr5m * 0.3;
+                const stopDistance = Math.abs(entryMid - stopLoss);
+                const takeProfit = isBullReversal
+                    ? entryMid + stopDistance * 2.0
+                    : entryMid - stopDistance * 2.0;
+                const entryZone = isBullReversal
+                    ? [entryMid - lastAtr5m * 0.1, entryMid + lastAtr5m * 0.2]
+                    : [entryMid - lastAtr5m * 0.2, entryMid + lastAtr5m * 0.1];
+                // ── Scoring ──────────────────────────────────────────────────
+                const components = this.zeroComponents();
+                // HTF: check EMA
+                const ema20 = (0, indicators_1.ema)(candles15m, 20);
+                const ema50 = (0, indicators_1.ema)(candles15m, 50);
+                const n = candles15m.length - 1;
+                const htfAligned = (isBullReversal && ema20[n] > ema50[n]) ||
+                    (!isBullReversal && ema20[n] < ema50[n]);
+                components.htfAlignment = htfAligned ? 16 : 10;
+                // Setup quality: strong wick is key
+                components.setupQuality = Math.min(20, Math.round(wickRatio * 8 + 8));
+                // Momentum: confirmation candle
+                const confBodySize = Math.abs(lastCandle5m.close - lastCandle5m.open);
+                components.momentum = Math.min(15, Math.round((confBodySize / avgAtr5m) * 12));
+                // Volatility
+                const atrRatio = lastAtr5m / avgAtr5m;
+                components.volatilityQuality = atrRatio < 2.0 ? 8 : 4;
+                // Regime fit: range is ideal
+                components.regimeFit = regime === 'RANGE' ? 10 : 6;
+                // Volume at sweep
+                const avgVol15m = candles15m.slice(-20).reduce((s, cv) => s + cv.volume, 0) / 20;
+                components.liquidity = c.volume > avgVol15m * 1.3 ? 10 : 6;
+                // Slippage
+                components.slippageRisk = 4;
+                // Session
+                components.sessionQuality = (0, indicators_1.sessionQualityScore)();
+                // Recent performance
+                components.recentPerformance = 3;
+                const score = this.totalScore(components);
+                const tier = score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
+                if (tier === 'NO_TRADE')
+                    continue;
+                const stopPct = Math.abs(entryZone[0] - stopLoss) / entryZone[0];
+                const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+                return {
+                    id: (0, uuid_1.v4)(),
+                    strategy: this.name,
+                    asset: 'BTC/USDT', // placeholder — overwritten by caller
+                    direction: isBullReversal ? 'LONG' : 'SHORT',
+                    tradeType,
+                    entryZone,
+                    stopLoss,
+                    takeProfit,
+                    components,
+                    score,
+                    tier,
+                    regime,
+                    timestamp: Date.now(),
+                    notes: `Sweep@${swingLevel.toFixed(2)}, WickRatio=${wickRatio.toFixed(1)}`,
+                };
+            }
+        }
+        return null;
+    }
+}
+exports.LiquiditySweepStrategy = LiquiditySweepStrategy;
+//# sourceMappingURL=liquiditySweep.js.map

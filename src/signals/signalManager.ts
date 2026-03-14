@@ -48,6 +48,25 @@ export function confirmEntry(
 
   const risk = calculateRisk(signal);
 
+  // ── Leverage-adjusted TP ─────────────────────────────────────────────────
+  // If TARGET_RETURN_PCT is configured, override the technical TP so the
+  // position closes when the user's capital has grown by that fraction.
+  // Formula: required price move = targetReturnPct / leverage
+  // e.g.  100% return with 25x lev → price must move 4% (100 / 25 = 4%)
+  const targetReturn = config.trading.targetReturnPct;
+  const isLong = signal.direction === 'LONG';
+  let adjustedTP = signal.takeProfit;
+  if (targetReturn > 0 && risk.suggestedLeverage > 0) {
+    const priceMovePct = targetReturn / risk.suggestedLeverage;
+    adjustedTP = isLong
+      ? entryPrice * (1 + priceMovePct)
+      : entryPrice * (1 - priceMovePct);
+    logger.info(
+      `TP overridden to leverage target: ${targetReturn * 100}% return @ ${risk.suggestedLeverage}x ` +
+      `→ price move ${(priceMovePct * 100).toFixed(2)}% → TP ${adjustedTP.toFixed(4)}`
+    );
+  }
+
   const position: ActivePosition = {
     id: signalId,
     signal,
@@ -58,7 +77,7 @@ export function confirmEntry(
     messageId,
     channelId,
     currentStopLoss: signal.stopLoss,
-    currentTakeProfit: signal.takeProfit,
+    currentTakeProfit: adjustedTP,
     highestPrice: entryPrice,
     lowestPrice: entryPrice,
     lastSLTPUpdateAt: Date.now(),

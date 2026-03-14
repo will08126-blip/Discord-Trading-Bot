@@ -6,6 +6,19 @@ import { startScheduler, runScanCycle } from './engine';
 import { config } from './config';
 import { logger } from './utils/logger';
 
+// ─── Global error guards ──────────────────────────────────────────────────────
+// Without these, a single unhandled rejection crashes Node 15+ (Render uses 20+).
+
+process.on('unhandledRejection', (reason: unknown) => {
+  logger.error('Unhandled promise rejection:', reason);
+  // Do NOT exit — log and keep the bot alive for the next interaction.
+});
+
+process.on('uncaughtException', (err: Error) => {
+  logger.error('Uncaught exception — restarting:', err);
+  process.exit(1); // Render will auto-restart the worker
+});
+
 async function main() {
   logger.info('Starting Discord Trading Bot...');
 

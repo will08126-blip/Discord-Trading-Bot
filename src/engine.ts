@@ -27,6 +27,7 @@ import {
   buildTPUpdateEmbed,
   buildExitAlertEmbed,
   buildClosedTradeEmbed,
+  buildEarlyProfitAlertEmbed,
 } from './bot/embeds';
 import { generateDailySummary } from './llm/summaries';
 import { config } from './config';
@@ -110,6 +111,26 @@ async function monitorActivePositions() {
       const asset = position.signal.asset as Asset;
       const candles5m = await fetchOHLCV(asset, '5m', 50);
       const currentPrice = candles5m[candles5m.length - 1].close;
+
+      // ── Early profit alert ────────────────────────────────────────────
+      // Fire once when capital return crosses earlyProfitAlertPct threshold.
+      const earlyAlertThreshold = config.trading.earlyProfitAlertPct;
+      if (earlyAlertThreshold > 0 && !position.exitAlertSent) {
+        const isLong = position.signal.direction === 'LONG';
+        const priceMoved = isLong
+          ? (currentPrice - position.entryPrice) / position.entryPrice
+          : (position.entryPrice - currentPrice) / position.entryPrice;
+        const capitalReturn = priceMoved * position.suggestedLeverage;
+        if (capitalReturn >= earlyAlertThreshold) {
+          position.exitAlertSent = true; // reuse flag — fires once per position
+          const channel = await discordClient.channels.fetch(position.channelId);
+          if (channel?.isTextBased()) {
+            await (channel as TextChannel).send(
+              buildEarlyProfitAlertEmbed(position, currentPrice, capitalReturn)
+            );
+          }
+        }
+      }
 
       const update = updateDynamicSLTP(position, candles5m, currentPrice);
       if (!update) continue;
