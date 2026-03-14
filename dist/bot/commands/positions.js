@@ -9,9 +9,10 @@ exports.data = new discord_js_1.SlashCommandBuilder()
     .setName('positions')
     .setDescription('List all currently tracked (confirmed) positions');
 async function execute(interaction) {
+    await interaction.deferReply();
     const positions = (0, signalManager_1.getAllActivePositions)();
     if (positions.length === 0) {
-        await interaction.reply({ content: '📭 No active positions being tracked.', ephemeral: true });
+        await interaction.editReply({ content: '📭 No active positions being tracked.' });
         return;
     }
     const embed = new discord_js_1.EmbedBuilder()
@@ -40,6 +41,6 @@ async function execute(interaction) {
         .setStyle(discord_js_1.ButtonStyle.Danger)
         .setEmoji('🔴'));
     const row = new discord_js_1.ActionRowBuilder().addComponents(...buttons);
-    await interaction.reply({ embeds: [embed], components: [row] });
+    await interaction.editReply({ embeds: [embed], components: [row] });
 }
 //# sourceMappingURL=positions.js.map

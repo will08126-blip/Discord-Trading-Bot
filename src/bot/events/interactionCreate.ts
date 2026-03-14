@@ -23,12 +23,19 @@ export async function onInteractionCreate(interaction: Interaction): Promise<voi
   // ── Slash commands ────────────────────────────────────────────────────────
   if (interaction.isChatInputCommand()) {
     const command = commands.get(interaction.commandName);
-    if (!command) return;
+    if (!command) {
+      // Unknown command — always reply so Discord doesn't show "Application did not respond"
+      logger.warn(`Unknown command received: /${interaction.commandName}`);
+      try {
+        await interaction.reply({ content: '⚠️ Unknown command. The bot may still be starting up — try again in a moment.', ephemeral: true });
+      } catch { /* token already expired */ }
+      return;
+    }
     try {
       await command.execute(interaction);
     } catch (err) {
       logger.error(`Command /${interaction.commandName} error:`, err);
-      const msg = { content: '❌ An error occurred running this command.', ephemeral: true };
+      const msg = { content: `❌ An error occurred running \`/${interaction.commandName}\`. Please try again.`, ephemeral: true };
       try {
         if (interaction.replied || interaction.deferred) {
           await interaction.followUp(msg);
@@ -37,7 +44,6 @@ export async function onInteractionCreate(interaction: Interaction): Promise<voi
         }
       } catch (replyErr) {
         // Interaction token likely expired (e.g. CCXT hung for >15 min).
-        // Log and swallow — there is nothing else we can do at this point.
         logger.warn(`Could not send error response for /${interaction.commandName}:`, replyErr);
       }
     }
