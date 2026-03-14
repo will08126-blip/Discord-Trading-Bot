@@ -108,16 +108,17 @@ export class TrendPullbackStrategy extends BaseStrategy {
     const swingLow = Math.min(...recentCandles.map((c) => c.low));
     const swingHigh = Math.max(...recentCandles.map((c) => c.high));
 
+    // SL: wider buffer (1.0×ATR) to avoid getting swept by normal wicks
     const stopLoss = isLong
-      ? swingLow - lastAtr5m * 0.5
-      : swingHigh + lastAtr5m * 0.5;
+      ? swingLow - lastAtr5m * 1.0
+      : swingHigh + lastAtr5m * 1.0;
 
     const stopDistance = Math.abs(entryMid - stopLoss);
 
-    // TP: 2.5:1 R:R
+    // TP: 3.0:1 R:R — gives room for trend to extend
     const takeProfit = isLong
-      ? entryMid + stopDistance * 2.5
-      : entryMid - stopDistance * 2.5;
+      ? entryMid + stopDistance * 3.0
+      : entryMid - stopDistance * 3.0;
 
     // ── Scoring ───────────────────────────────────────────────────────────────
     const components = this.zeroComponents();
@@ -162,10 +163,11 @@ export class TrendPullbackStrategy extends BaseStrategy {
 
     if (tier === 'NO_TRADE') return null;
 
-    // Trend pullback confirms on 5m — it's a scalp entry on a 15m/4h trend
-    // Classify as SCALP when SL is tight (< 0.5%), otherwise SWING
     const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-    const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+    const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+
+    // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
+    if (tradeType === 'SCALP' && sessionQualityScore() <= 2) return null;
 
     return {
       id: uuidv4(),
@@ -181,7 +183,7 @@ export class TrendPullbackStrategy extends BaseStrategy {
       tier,
       regime,
       timestamp: Date.now(),
-      notes: `RSI=${lastRsi15.toFixed(1)}, ATR=${lastAtr5m.toFixed(2)}, ${tradeType}`,
+      notes: `RSI=${lastRsi15.toFixed(1)}, SL=${(stopPct*100).toFixed(2)}%, ${tradeType}`,
     };
   }
 }

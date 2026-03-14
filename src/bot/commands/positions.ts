@@ -1,4 +1,11 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import {
+  SlashCommandBuilder,
+  ChatInputCommandInteraction,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} from 'discord.js';
 import { getAllActivePositions } from '../../signals/signalManager';
 import { formatPrice } from '../../risk/riskCalculator';
 
@@ -7,10 +14,12 @@ export const data = new SlashCommandBuilder()
   .setDescription('List all currently tracked (confirmed) positions');
 
 export async function execute(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply();
+
   const positions = getAllActivePositions();
 
   if (positions.length === 0) {
-    await interaction.reply({ content: '📭 No active positions being tracked.', ephemeral: true });
+    await interaction.editReply({ content: '📭 No active positions being tracked.' });
     return;
   }
 
@@ -30,11 +39,20 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         `SL: ${formatPrice(pos.currentStopLoss, asset)}${pos.currentStopLoss !== pos.signal.stopLoss ? ' *(trailing)*' : ''}`,
         `TP: ${formatPrice(pos.currentTakeProfit, asset)}${pos.currentTakeProfit !== pos.signal.takeProfit ? ' *(extended)*' : ''}`,
         `Lev: ${pos.suggestedLeverage}x  |  Type: ${pos.signal.tradeType}  |  Held: ${held} min`,
-        `Close: \`/close ${pos.id.slice(0, 8)} <exit-price>\``,
       ].join('\n'),
       inline: false,
     });
   }
 
-  await interaction.reply({ embeds: [embed] });
+  // One close button per position (bot caps at 3 open positions — fits in one row)
+  const buttons = positions.map((pos) =>
+    new ButtonBuilder()
+      .setCustomId(`closePosition:${pos.id}`)
+      .setLabel(`Close ${pos.signal.asset.split('/')[0]}`)
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔴')
+  );
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
+
+  await interaction.editReply({ embeds: [embed], components: [row] });
 }

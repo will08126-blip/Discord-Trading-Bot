@@ -1,8 +1,10 @@
+import fs from 'fs';
+import path from 'path';
 import type { StrategySignal, ActivePosition, ClosedTrade, ExitReason, OHLCV } from '../types';
 import { calculateRisk } from '../risk/riskCalculator';
 import { addTrade } from '../performance/tracker';
 import { onTradeClosed } from '../adaptation/adaptation';
-import { atr, atrAverage } from '../indicators/indicators';
+import { atr, ema, rsi } from '../indicators/indicators';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 
@@ -10,6 +12,32 @@ import { logger } from '../utils/logger';
 const pendingSignals = new Map<string, StrategySignal>();    // posted, awaiting confirmation
 const activePositions = new Map<string, ActivePosition>();   // confirmed, being tracked
 const recentlySentAssets = new Map<string, number>();        // for duplicate suppression
+
+// ─── Position persistence ──────────────────────────────────────────────────────
+
+const POSITIONS_FILE = path.join(config.paths.data, 'positions.json');
+
+function savePositions(): void {
+  try {
+    fs.mkdirSync(path.dirname(POSITIONS_FILE), { recursive: true });
+    fs.writeFileSync(POSITIONS_FILE, JSON.stringify([...activePositions.values()], null, 2));
+  } catch (err) {
+    logger.error('Failed to save active positions to disk:', err);
+  }
+}
+
+/** Load positions saved from a previous session. Call once at startup. */
+export function loadPositions(): void {
+  if (!fs.existsSync(POSITIONS_FILE)) return;
+  try {
+    const raw = fs.readFileSync(POSITIONS_FILE, 'utf-8');
+    const data: ActivePosition[] = JSON.parse(raw);
+    for (const p of data) activePositions.set(p.id, p);
+    logger.info(`Restored ${data.length} active position(s) from disk`);
+  } catch (err) {
+    logger.warn('Failed to load saved positions — starting fresh:', err);
+  }
+}
 
 // ─── Signal lifecycle ─────────────────────────────────────────────────────────
 
@@ -48,6 +76,25 @@ export function confirmEntry(
 
   const risk = calculateRisk(signal);
 
+  // ── Leverage-adjusted TP ─────────────────────────────────────────────────
+  // If TARGET_RETURN_PCT is configured, override the technical TP so the
+  // position closes when the user's capital has grown by that fraction.
+  // Formula: required price move = targetReturnPct / leverage
+  // e.g.  100% return with 25x lev → price must move 4% (100 / 25 = 4%)
+  const targetReturn = config.trading.targetReturnPct;
+  const isLong = signal.direction === 'LONG';
+  let adjustedTP = signal.takeProfit;
+  if (targetReturn > 0 && risk.suggestedLeverage > 0) {
+    const priceMovePct = targetReturn / risk.suggestedLeverage;
+    adjustedTP = isLong
+      ? entryPrice * (1 + priceMovePct)
+      : entryPrice * (1 - priceMovePct);
+    logger.info(
+      `TP overridden to leverage target: ${targetReturn * 100}% return @ ${risk.suggestedLeverage}x ` +
+      `→ price move ${(priceMovePct * 100).toFixed(2)}% → TP ${adjustedTP.toFixed(4)}`
+    );
+  }
+
   const position: ActivePosition = {
     id: signalId,
     signal,
@@ -58,15 +105,17 @@ export function confirmEntry(
     messageId,
     channelId,
     currentStopLoss: signal.stopLoss,
-    currentTakeProfit: signal.takeProfit,
+    currentTakeProfit: adjustedTP,
     highestPrice: entryPrice,
     lowestPrice: entryPrice,
     lastSLTPUpdateAt: Date.now(),
+    tpExtensionCount: 0,
     exitAlertSent: false,
   };
 
   activePositions.set(signalId, position);
   pendingSignals.delete(signalId);
+  savePositions();
   logger.info(`Position confirmed: ${signal.asset} ${signal.direction} @ ${entryPrice}`);
   return position;
 }
@@ -119,6 +168,7 @@ function closePosition(
   };
 
   activePositions.delete(positionId);
+  savePositions();
   addTrade(trade);
   onTradeClosed(trade);
 
@@ -151,11 +201,8 @@ function closePosition(
  */
 export interface SLTPUpdate {
   position: ActivePosition;
-  oldSL: number;
-  newSL: number;
   oldTP: number;
   newTP: number;
-  hitSL: boolean;   // current price crossed SL
   hitTP: boolean;   // current price crossed TP
   currentPrice: number;
 }
@@ -166,41 +213,26 @@ export function updateDynamicSLTP(
   currentPrice: number
 ): SLTPUpdate | null {
   const isLong = position.signal.direction === 'LONG';
-  const isScalp = position.signal.tradeType === 'SCALP';
-  const atrMultiplier = isScalp ? 0.8 : 1.5;
 
   const atrVals = atr(candles5m, 14);
   const currentAtr = atrVals[atrVals.length - 1];
   if (!currentAtr || isNaN(currentAtr)) return null;
 
-  const oldSL = position.currentStopLoss;
   const oldTP = position.currentTakeProfit;
 
-  // Track price extremes
+  // Track price extremes (used for TP extension)
   if (isLong && currentPrice > position.highestPrice) position.highestPrice = currentPrice;
   if (!isLong && currentPrice < position.lowestPrice) position.lowestPrice = currentPrice;
 
-  // ── Trailing stop ──────────────────────────────────────────────────────
-  let newSL = oldSL;
-  if (isLong) {
-    const trailLevel = position.highestPrice - currentAtr * atrMultiplier;
-    // SL can only move up (never tighten in the wrong direction)
-    if (trailLevel > oldSL) newSL = trailLevel;
-  } else {
-    const trailLevel = position.lowestPrice + currentAtr * atrMultiplier;
-    // SL can only move down for shorts
-    if (trailLevel < oldSL) newSL = trailLevel;
-  }
-
   // ── TP extension ──────────────────────────────────────────────────────
+  // If price has moved > 1.5× the original reference distance in our favour, extend TP
   const originalStopDist = Math.abs(position.entryPrice - position.signal.stopLoss);
   const priceMoved = isLong
     ? currentPrice - position.entryPrice
     : position.entryPrice - currentPrice;
 
   let newTP = oldTP;
-  if (priceMoved > originalStopDist * 1.5) {
-    // Price has moved 1.5R in our favour — extend TP
+  if (originalStopDist > 0 && priceMoved > originalStopDist * 1.5) {
     const extension = originalStopDist * 0.5;
     const extended = isLong ? oldTP + extension : oldTP - extension;
     if (isLong && extended > newTP) newTP = extended;
@@ -208,28 +240,22 @@ export function updateDynamicSLTP(
   }
 
   // Commit changes
-  position.currentStopLoss = newSL;
   position.currentTakeProfit = newTP;
   position.lastSLTPUpdateAt = Date.now();
 
-  // ── Check for SL/TP breach ────────────────────────────────────────────
-  const hitSL = isLong ? currentPrice <= newSL : currentPrice >= newSL;
+  // ── Check for TP breach ───────────────────────────────────────────────
   const hitTP = isLong ? currentPrice >= newTP : currentPrice <= newTP;
 
-  // Only report if something meaningful changed (> 0.2% movement) or if hit
-  const slChangePct = Math.abs(newSL - oldSL) / oldSL;
+  // Only report if TP extended meaningfully (> 0.2%) or if hit
   const tpChangePct = Math.abs(newTP - oldTP) / oldTP;
-  const significantChange = slChangePct > 0.002 || tpChangePct > 0.002;
+  const significantChange = tpChangePct > 0.002;
 
-  if (!significantChange && !hitSL && !hitTP) return null;
+  if (!significantChange && !hitTP) return null;
 
   return {
     position,
-    oldSL,
-    newSL,
     oldTP,
     newTP,
-    hitSL,
     hitTP,
     currentPrice,
   };
@@ -243,16 +269,92 @@ export function handleSLTPHit(update: SLTPUpdate): ClosedTrade | null {
   if (update.hitTP) {
     return closePosition(update.position.id, update.currentPrice, 'TP');
   }
-  if (update.hitSL) {
-    return closePosition(update.position.id, update.currentPrice, 'SL');
-  }
   return null;
+}
+
+// ─── Momentum-based TP extension ──────────────────────────────────────────────
+
+/**
+ * Evaluates whether live momentum supports extending TP further.
+ * Checks three conditions and returns true if at least 2 pass:
+ *
+ *   1. Price is on the correct side of EMA(9)      — trend intact
+ *   2. RSI(14) is not in extreme territory          — room left to run
+ *      (< 80 for LONG, > 20 for SHORT)
+ *   3. Both of the last 2 candles closed in the     — recent momentum
+ *      trade direction
+ */
+export function evaluateMomentumForExtension(
+  candles: OHLCV[],
+  direction: string
+): boolean {
+  if (candles.length < 15) return false;
+  const isLong = direction === 'LONG';
+
+  // 1. EMA(9): is price still on the right side?
+  const emaVals = ema(candles, 9);
+  const currentEma = emaVals[emaVals.length - 1];
+  const currentClose = candles[candles.length - 1].close;
+  const emaPass = !isNaN(currentEma) && (isLong ? currentClose > currentEma : currentClose < currentEma);
+
+  // 2. RSI(14): not overbought/oversold at the extreme
+  const rsiVals = rsi(candles, 14);
+  const currentRsi = rsiVals[rsiVals.length - 1];
+  const rsiPass = !isNaN(currentRsi) && (isLong ? currentRsi < 80 : currentRsi > 20);
+
+  // 3. Last 2 candles closed in the trade direction
+  const last2 = candles.slice(-2);
+  const bullish = last2.filter((c) => c.close > c.open).length;
+  const bearish = last2.filter((c) => c.close < c.open).length;
+  const candlePass = isLong ? bullish >= 2 : bearish >= 2;
+
+  return [emaPass, rsiPass, candlePass].filter(Boolean).length >= 2;
+}
+
+/**
+ * Called when price comes within 0.3% of TP.
+ * Runs the momentum check and, if it passes and extensions remain,
+ * pushes TP out by 1× ATR so the trade can run further.
+ *
+ * Returns { oldTP, newTP } on success, null if extension was skipped
+ * (limit reached, momentum weak, or ATR unavailable).
+ *
+ * Hard cap: 2 momentum extensions per position.
+ */
+export function attemptMomentumTPExtension(
+  position: ActivePosition,
+  candles: OHLCV[],
+  currentPrice: number
+): { oldTP: number; newTP: number } | null {
+  if (position.tpExtensionCount >= 2) return null;
+
+  const atrVals = atr(candles, 14);
+  const currentAtr = atrVals[atrVals.length - 1];
+  if (!currentAtr || isNaN(currentAtr)) return null;
+
+  if (!evaluateMomentumForExtension(candles, position.signal.direction)) return null;
+
+  const isLong = position.signal.direction === 'LONG';
+  const oldTP = position.currentTakeProfit;
+  const newTP = isLong ? oldTP + currentAtr : oldTP - currentAtr;
+
+  position.currentTakeProfit = newTP;
+  position.tpExtensionCount += 1;
+  position.lastSLTPUpdateAt = Date.now();
+
+  logger.info(
+    `TP extended by momentum (${position.tpExtensionCount}/2): ` +
+    `${position.signal.asset} ${position.signal.direction} ` +
+    `TP ${oldTP.toFixed(4)} → ${newTP.toFixed(4)} (ATR=${currentAtr.toFixed(4)})`
+  );
+
+  return { oldTP, newTP };
 }
 
 // ─── Duplicate suppression ────────────────────────────────────────────────────
 
 export function isDuplicateSignal(signal: StrategySignal): boolean {
-  const key = `${signal.asset}:${signal.direction}`;
+  const key = `${signal.asset}:${signal.direction}:${signal.strategy}`;
   const lastSent = recentlySentAssets.get(key);
   if (lastSent && Date.now() - lastSent < config.engine.duplicateWindowMs) {
     return true;
@@ -261,6 +363,6 @@ export function isDuplicateSignal(signal: StrategySignal): boolean {
 }
 
 export function markSignalSent(signal: StrategySignal): void {
-  const key = `${signal.asset}:${signal.direction}`;
+  const key = `${signal.asset}:${signal.direction}:${signal.strategy}`;
   recentlySentAssets.set(key, Date.now());
 }

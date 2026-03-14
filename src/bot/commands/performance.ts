@@ -18,6 +18,7 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const period = (interaction.options.getString('period') ?? 'all') as 'today' | 'week' | 'all';
+  await interaction.deferReply();
   const allTrades = loadTrades();
 
   let trades = allTrades;
@@ -57,12 +58,13 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     );
 
   // Trade-type breakdown
-  const { SCALP, SWING } = stats.byTradeType as Record<string, { trades: number; wins: number; winRate: number }>;
-  if ((SCALP?.trades ?? 0) + (SWING?.trades ?? 0) > 0) {
+  const { SCALP, HYBRID, SWING } = stats.byTradeType as Record<string, { trades: number; wins: number; winRate: number }>;
+  if ((SCALP?.trades ?? 0) + (HYBRID?.trades ?? 0) + (SWING?.trades ?? 0) > 0) {
     embed.addFields({
       name: 'By Type',
       value: [
         `⚡ Scalp:  ${SCALP?.trades ?? 0} trades  |  ${((SCALP?.winRate ?? 0) * 100).toFixed(0)}% WR`,
+        `🔀 Hybrid: ${HYBRID?.trades ?? 0} trades  |  ${((HYBRID?.winRate ?? 0) * 100).toFixed(0)}% WR`,
         `🌊 Swing:  ${SWING?.trades ?? 0} trades  |  ${((SWING?.winRate ?? 0) * 100).toFixed(0)}% WR`,
       ].join('\n'),
       inline: false,
@@ -79,5 +81,5 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
 
   embed.setTimestamp();
-  await interaction.reply({ embeds: [embed] });
+  await interaction.editReply({ embeds: [embed] });
 }

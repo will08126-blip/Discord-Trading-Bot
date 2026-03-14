@@ -15,6 +15,7 @@ import * as configCmd from './config';
 import * as checkCmd from './check';
 import * as watchlistCmd from './watchlist';
 import * as liveCmd from './live';
+import * as tradeStatusCmd from './tradeStatus';
 
 export interface Command {
   data: { toJSON: () => unknown; name: string };
@@ -35,6 +36,7 @@ export const commands = new Map<string, Command>([
   ['check', checkCmd],
   ['watchlist', watchlistCmd],
   ['live', liveCmd],
+  ['trade-status', tradeStatusCmd],
 ]);
 
 /** Deploy (register) all slash commands with Discord's API */

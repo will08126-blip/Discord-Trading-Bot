@@ -30,6 +30,14 @@ services:
         value: "5"
       - key: ENABLED
         value: "true"
+      # Leverage-adjusted profit targets
+      # earlyProfitAlertPct: alert when capital is up this fraction (0.5 = 50%)
+      # targetReturnPct:     set TP price to close at this capital return (1.0 = 100%)
+      # Set to 0 to disable either feature independently.
+      - key: EARLY_PROFIT_ALERT_PCT
+        value: "0.5"
+      - key: TARGET_RETURN_PCT
+        value: "1.0"
       - key: NODE_ENV
         value: production
     disk:

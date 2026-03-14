@@ -59,13 +59,13 @@ export function filterAndRankSignals(
 }
 
 /**
- * De-duplicate signals: if the same asset+direction appears multiple times,
- * keep only the highest-scoring one.
+ * De-duplicate signals: keep at most one signal per asset+direction+strategy combo.
+ * Different strategies can post for the same asset+direction in the same cycle.
  */
 export function deduplicateSignals(signals: StrategySignal[]): StrategySignal[] {
   const best = new Map<string, StrategySignal>();
   for (const s of signals) {
-    const key = `${s.asset}:${s.direction}`;
+    const key = `${s.asset}:${s.direction}:${s.strategy}`;
     const existing = best.get(key);
     if (!existing || s.score > existing.score) {
       best.set(key, s);

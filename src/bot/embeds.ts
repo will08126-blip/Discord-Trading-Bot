@@ -4,6 +4,7 @@ import { calculateRisk, formatPrice } from '../risk/riskCalculator';
 import { regimeLabel } from '../regime/regimeDetector';
 import { tierEmoji, tierColor } from '../scoring/votingEngine';
 import type { SingleAssetScanResult } from '../engine';
+import { config } from '../config';
 
 const LINE = '━━━━━━━━━━━━━━━━━━━━━━━';
 
@@ -16,6 +17,30 @@ function pct(price: number, reference: number): string {
   return `${p >= 0 ? '+' : ''}${p.toFixed(2)}%`;
 }
 
+/**
+ * Renders a 10-dot emoji scale showing capital deployment confidence.
+ * Dot colour reflects conviction level; unfilled dots are shown as ⚪.
+ *
+ *   score ≥ 70 → 🟢  |  40–69 → 🟡  |  < 40 → 🔴
+ *
+ * Example (score 82):
+ *   🟢🟢🟢🟢🟢🟢🟢🟢🟡⚪  82/100
+ *   VERY HIGH — strong conditions to size up
+ */
+function buildDeploymentMeter(score: number): string {
+  const filled = Math.round(score / 10);
+  const dot = score >= 70 ? '🟢' : score >= 40 ? '🟡' : '🔴';
+  const dots = dot.repeat(filled) + '⚪'.repeat(10 - filled);
+
+  const label =
+    score >= 80 ? 'VERY HIGH — strong conditions to size up' :
+    score >= 60 ? 'HIGH — solid conditions' :
+    score >= 40 ? 'MODERATE — be selective with size' :
+                  'LOW — consider sitting this one out';
+
+  return `${dots}  ${score}/100\n${label}`;
+}
+
 // ─── Signal embed ─────────────────────────────────────────────────────────────
 
 export function buildSignalEmbed(signal: StrategySignal) {
@@ -24,7 +49,7 @@ export function buildSignalEmbed(signal: StrategySignal) {
   const entry = risk.entryPrice;
 
   const title = `${tierEmoji(signal.tier)} ${signal.tier} ${signal.direction}  —  ${asset}/USDT`;
-  const tradeTypeLabel = signal.tradeType === 'SCALP' ? '⚡ Scalp' : '🌊 Swing';
+  const tradeTypeLabel = signal.tradeType === 'SCALP' ? '⚡ Scalp' : signal.tradeType === 'HYBRID' ? '🔀 Hybrid' : '🌊 Swing';
 
   const embed = new EmbedBuilder()
     .setColor(tierColor(signal.tier))
@@ -38,17 +63,14 @@ export function buildSignalEmbed(signal: StrategySignal) {
         name: LINE,
         value: [
           `📍 **Entry Zone:**  ${formatPrice(signal.entryZone[0], asset)} – ${formatPrice(signal.entryZone[1], asset)}`,
-          `🛑 **Stop Loss:**  ${formatPrice(signal.stopLoss, asset)}  (${pct(signal.stopLoss, entry)})`,
           `🎯 **Take Profit:** ${formatPrice(signal.takeProfit, asset)}  (${pct(signal.takeProfit, entry)})`,
-          `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x  |  **SL dist:** ${(risk.stopDistancePct * 100).toFixed(2)}%`,
+          `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x`,
         ].join('\n'),
         inline: false,
       },
       {
-        name: `💰 Suggested Risk: ${risk.riskPct}% of your capital`,
-        value: risk.referenceTable
-          .map((r) => `$${r.capital.toLocaleString()} → risk **$${r.riskDollars}** (pos ~$${r.positionSize.toLocaleString()})`)
-          .join('\n'),
+        name: '💰 Capital Deployment Confidence',
+        value: buildDeploymentMeter(risk.deploymentScore),
         inline: false,
       },
       {
@@ -63,7 +85,7 @@ export function buildSignalEmbed(signal: StrategySignal) {
       },
       {
         name: LINE,
-        value: '✅ **Click "Entered"** if you took this trade  |  ❌ to dismiss',
+        value: '**Took this trade on your exchange?** Click ✅ **Entered** below — the bot will track it for you and alert you when to exit.',
         inline: false,
       }
     )
@@ -109,49 +131,52 @@ export function buildPositionEmbed(position: ActivePosition, currentPrice?: numb
   const embed = new EmbedBuilder()
     .setColor(isLong ? 0x00cc44 : 0xff4444)
     .setTitle(`${dirEmoji(position.signal.direction)} TRACKING: ${asset} ${position.signal.direction}`)
+    .setDescription('Your trade is being tracked. When you close it on your exchange, click **Close Position** below — the bot will fetch the current price for you.')
     .addFields({
       name: LINE,
       value: [
         `📍 **Entry:** ${formatPrice(position.entryPrice, asset)}`,
-        `🛑 **Current SL:** ${formatPrice(position.currentStopLoss, asset)}  ${
-          position.currentStopLoss !== position.signal.stopLoss ? '*(trailing)*' : ''
-        }`,
         `🎯 **Current TP:** ${formatPrice(position.currentTakeProfit, asset)}  ${
           position.currentTakeProfit !== position.signal.takeProfit ? '*(extended)*' : ''
         }`,
         priceLine,
         pnlLine,
-        `📐 **Leverage:** ${position.suggestedLeverage}x  |  **Risk:** ${position.riskPct}% of capital`,
+        `📐 **Leverage:** ${position.suggestedLeverage}x`,
         `⚡ **Type:** ${position.signal.tradeType}  |  **Strategy:** ${position.signal.strategy}`,
       ].filter(Boolean).join('\n'),
       inline: false,
     })
     .setTimestamp()
-    .setFooter({ text: `Position ID: ${position.id.slice(0, 8)} — use /close ${position.id.slice(0, 8)} <price> to close` });
+    .setFooter({ text: `Position ID: ${position.id.slice(0, 8)}` });
 
-  return { embeds: [embed] };
+  const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`closePosition:${position.id}`)
+      .setLabel('Close Position')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔴')
+  );
+
+  return { embeds: [embed], components: [closeRow] };
 }
 
 // ─── Exit alert embed ─────────────────────────────────────────────────────────
 
 export function buildExitAlertEmbed(
   position: ActivePosition,
-  type: 'SL_APPROACH' | 'TP_APPROACH' | 'SL_HIT' | 'TP_HIT',
+  type: 'TP_APPROACH' | 'TP_HIT',
   currentPrice: number,
-  newSL?: number,
   newTP?: number
 ) {
   const asset = position.signal.asset.split('/')[0];
   const isLong = position.signal.direction === 'LONG';
 
-  const labels: Record<string, { emoji: string; title: string; color: number }> = {
-    SL_APPROACH: { emoji: '⚠️', title: 'SL APPROACHING', color: 0xffa500 },
-    TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING', color: 0x00ccff },
-    SL_HIT:      { emoji: '🛑', title: 'STOP LOSS HIT — Consider Exiting', color: 0xff0000 },
-    TP_HIT:      { emoji: '🎯', title: 'TAKE PROFIT HIT — Consider Exiting', color: 0x00ff00 },
+  const labels: Record<string, { emoji: string; title: string; color: number; desc: string }> = {
+    TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING', color: 0x00ccff, desc: 'Price is near your take profit. Consider locking in gains.' },
+    TP_HIT:      { emoji: '🎯', title: 'TAKE PROFIT HIT', color: 0x00ff00, desc: 'Your take profit has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
   };
 
-  const { emoji, title, color } = labels[type];
+  const { emoji, title, color, desc } = labels[type];
   const pnlPct = isLong
     ? (currentPrice - position.entryPrice) / position.entryPrice
     : (position.entryPrice - currentPrice) / position.entryPrice;
@@ -159,31 +184,35 @@ export function buildExitAlertEmbed(
   const embed = new EmbedBuilder()
     .setColor(color)
     .setTitle(`${emoji} ${asset} ${position.signal.direction} — ${title}`)
+    .setDescription(desc)
     .addFields({
       name: LINE,
       value: [
         `💹 **Current Price:** ${formatPrice(currentPrice, asset)}`,
         `📍 **Entry:** ${formatPrice(position.entryPrice, asset)}`,
-        newSL ? `🛑 **SL (updated):** ${formatPrice(newSL, asset)}` : `🛑 **SL:** ${formatPrice(position.currentStopLoss, asset)}`,
         newTP ? `🎯 **TP (updated):** ${formatPrice(newTP, asset)}` : `🎯 **TP:** ${formatPrice(position.currentTakeProfit, asset)}`,
         `📊 **Unrealised P&L:** ${pnlPct >= 0 ? '+' : ''}${(pnlPct * 100).toFixed(2)}%`,
-        '',
-        `Use \`/close ${position.id.slice(0, 8)} <exit-price>\` to record your exit.`,
       ].filter(Boolean).join('\n'),
       inline: false,
     })
     .setTimestamp()
     .setFooter({ text: `Position ID: ${position.id.slice(0, 8)}` });
 
-  return { embeds: [embed] };
+  const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`closePosition:${position.id}`)
+      .setLabel('Close Position')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔴')
+  );
+
+  return { embeds: [embed], components: [closeRow] };
 }
 
-// ─── SL/TP update embed ───────────────────────────────────────────────────────
+// ─── TP update embed ──────────────────────────────────────────────────────────
 
-export function buildSLTPUpdateEmbed(
+export function buildTPUpdateEmbed(
   position: ActivePosition,
-  oldSL: number,
-  newSL: number,
   oldTP: number,
   newTP: number,
   currentPrice: number
@@ -191,14 +220,13 @@ export function buildSLTPUpdateEmbed(
   const asset = position.signal.asset.split('/')[0];
   const embed = new EmbedBuilder()
     .setColor(0x8888ff)
-    .setTitle(`🔄 ${asset} ${position.signal.direction} — SL/TP Updated`)
+    .setTitle(`🔄 ${asset} ${position.signal.direction} — Take Profit Extended`)
     .addFields({
       name: 'Level Changes',
       value: [
-        oldSL !== newSL ? `🛑 SL: ${formatPrice(oldSL, asset)} → **${formatPrice(newSL, asset)}**` : '',
-        oldTP !== newTP ? `🎯 TP: ${formatPrice(oldTP, asset)} → **${formatPrice(newTP, asset)}**` : '',
+        `🎯 TP: ${formatPrice(oldTP, asset)} → **${formatPrice(newTP, asset)}**`,
         `💹 Current: ${formatPrice(currentPrice, asset)}`,
-      ].filter(Boolean).join('\n'),
+      ].join('\n'),
       inline: false,
     })
     .setTimestamp()
@@ -270,18 +298,67 @@ export function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive = f
   });
 
   const title = isLive ? '📡 Live Watchlist — BTC · ETH · SOL · XRP · PEPE' : '📊 Watchlist Scan — BTC · ETH · SOL · XRP · PEPE';
-  const footer = isLive ? '🔄 Auto-refreshes every 5 min — use /live stop to stop' : 'Use /check <symbol> for full signal details';
+  const footer = isLive ? `🔄 Auto-refreshes every ${config.engine.scanIntervalMinutes} min — use /live stop to stop` : 'Use /check <symbol> for full signal details';
+
+  const fullValue = lines.join('\n') || 'No setups found across watchlist.';
+  // Discord embed field values must be ≤1024 chars — truncate if needed
+  const fieldValue = fullValue.length > 1024 ? fullValue.slice(0, 1021) + '…' : fullValue;
 
   return {
     embeds: [
       new EmbedBuilder()
         .setColor(0x5865f2)
         .setTitle(title)
-        .addFields({ name: LINE, value: lines.join('\n') || 'No setups found across watchlist.', inline: false })
+        .addFields({ name: LINE, value: fieldValue, inline: false })
         .setTimestamp()
         .setFooter({ text: footer }),
     ],
   };
+}
+
+// ─── Early profit alert embed ─────────────────────────────────────────────────
+
+export function buildEarlyProfitAlertEmbed(
+  position: ActivePosition,
+  currentPrice: number,
+  returnOnCapital: number   // fraction, e.g. 0.50 = 50%
+) {
+  const asset = position.signal.asset.split('/')[0];
+  const isLong = position.signal.direction === 'LONG';
+  const pnlPct = isLong
+    ? (currentPrice - position.entryPrice) / position.entryPrice
+    : (position.entryPrice - currentPrice) / position.entryPrice;
+
+  const embed = new EmbedBuilder()
+    .setColor(0xFFD700)
+    .setTitle(`💰 ${asset} ${position.signal.direction} — Early Profit Target Hit!`)
+    .setDescription(
+      `Your position has returned **+${(returnOnCapital * 100).toFixed(0)}%** on capital ` +
+      `at **${position.suggestedLeverage}x** leverage. Consider taking profits or tightening your stop.`
+    )
+    .addFields({
+      name: LINE,
+      value: [
+        `💹 **Current Price:** ${formatPrice(currentPrice, asset)}`,
+        `📍 **Entry:** ${formatPrice(position.entryPrice, asset)}`,
+        `📊 **Price Move:** +${(pnlPct * 100).toFixed(2)}%`,
+        `💰 **Capital Return (${position.suggestedLeverage}x):** +${(returnOnCapital * 100).toFixed(0)}%`,
+        `🎯 **Full TP:** ${formatPrice(position.currentTakeProfit, asset)}`,
+      ].join('\n'),
+      inline: false,
+    })
+    .setTimestamp()
+    .setFooter({ text: `Position ID: ${position.id.slice(0, 8)}` });
+
+  const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`closePosition:${position.id}`)
+      .setLabel('Close Position')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('💰')
+  );
+
+  return { embeds: [embed], components: [closeRow] };
 }
 
 // ─── Closed trade embed ────────────────────────────────────────────────────────

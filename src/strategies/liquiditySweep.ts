@@ -146,14 +146,16 @@ export class LiquiditySweepStrategy extends BaseStrategy {
 
         // Build signal
         const entryMid = lastCandle5m.close;
+        // SL: behind the sweep wick with wider buffer (0.7×ATR) — wicks can extend on sweeps
         const stopLoss = isBullReversal
-          ? c.low - lastAtr5m * 0.3
-          : c.high + lastAtr5m * 0.3;
+          ? c.low - lastAtr5m * 0.7
+          : c.high + lastAtr5m * 0.7;
 
         const stopDistance = Math.abs(entryMid - stopLoss);
+        // TP: 2.5:1 R:R — liquidity sweeps are reversals; more conservative than trend trades
         const takeProfit = isBullReversal
-          ? entryMid + stopDistance * 2.0
-          : entryMid - stopDistance * 2.0;
+          ? entryMid + stopDistance * 2.5
+          : entryMid - stopDistance * 2.5;
 
         const entryZone: [number, number] = isBullReversal
           ? [entryMid - lastAtr5m * 0.1, entryMid + lastAtr5m * 0.2]
@@ -204,8 +206,11 @@ export class LiquiditySweepStrategy extends BaseStrategy {
 
         if (tier === 'NO_TRADE') continue;
 
-        const stopPct = Math.abs(entryZone[0] - stopLoss) / entryZone[0];
-        const tradeType: TradeType = stopPct < 0.005 ? 'SCALP' : 'SWING';
+        const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
+        const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+
+        // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
+        if (tradeType === 'SCALP' && sessionQualityScore() <= 2) continue;
 
         return {
           id: uuidv4(),

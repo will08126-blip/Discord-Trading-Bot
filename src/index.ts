@@ -3,11 +3,28 @@ import { discordClient } from './bot/client';
 import { onReady } from './bot/events/ready';
 import { onInteractionCreate } from './bot/events/interactionCreate';
 import { startScheduler, runScanCycle } from './engine';
+import { loadPositions } from './signals/signalManager';
 import { config } from './config';
 import { logger } from './utils/logger';
 
+// ─── Global error guards ──────────────────────────────────────────────────────
+// Without these, a single unhandled rejection crashes Node 15+ (Render uses 20+).
+
+process.on('unhandledRejection', (reason: unknown) => {
+  logger.error('Unhandled promise rejection:', reason);
+  // Do NOT exit — log and keep the bot alive for the next interaction.
+});
+
+process.on('uncaughtException', (err: Error) => {
+  logger.error('Uncaught exception — restarting:', err);
+  process.exit(1); // Render will auto-restart the worker
+});
+
 async function main() {
   logger.info('Starting Discord Trading Bot...');
+
+  // Restore active positions from the previous session before anything else
+  loadPositions();
 
   // Register Discord event handlers
   discordClient.once(Events.ClientReady, async (client) => {

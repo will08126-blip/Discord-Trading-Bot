@@ -113,10 +113,15 @@ export function bollinger(
   return { upper, middle, lower, width };
 }
 
-/** Minimum Bollinger width over the last `lookback` candles (squeeze detector) */
+/**
+ * Minimum Bollinger width over the last `lookback` candles (squeeze detector).
+ * Returns Infinity when there is insufficient valid data (< 75% of lookback),
+ * which callers should treat as "no squeeze data available".
+ */
 export function bollingerWidthMin(width: number[], lookback = 20): number {
   const valid = width.filter((v) => !isNaN(v)).slice(-lookback);
-  return valid.length > 0 ? Math.min(...valid) : Infinity;
+  if (valid.length < Math.floor(lookback * 0.75)) return Infinity;
+  return Math.min(...valid);
 }
 
 // ─── VWAP (session-based, resets each day) ───────────────────────────────────
@@ -180,6 +185,7 @@ export function swingPoints(
 
 export function volumeAverage(candles: OHLCV[], lookback = 20): number {
   const vols = volumes(candles).slice(-lookback);
+  if (vols.length === 0) return 0;
   return vols.reduce((a, b) => a + b, 0) / vols.length;
 }
 
@@ -234,65 +240,76 @@ export function isBearishPin(candle: OHLCV): boolean {
 // ─── RSI divergence ──────────────────────────────────────────────────────────
 
 /**
- * Simple bullish divergence: price makes lower low but RSI makes higher low.
- * Checks last two swing lows against RSI at those points.
+ * Bullish divergence: most-recent swing low is lower in price but higher in RSI
+ * than the previous swing low (candles 10–20 back).
+ *
+ * Two-pass approach avoids the backward-iteration bug where the algorithm
+ * could never set prevLow when the most-recent candles hold the new low.
  */
 export function hasBullishDivergence(candles: OHLCV[], rsiValues: number[]): boolean {
   const n = candles.length;
-  if (n < 10) return false;
-  let prevLowIdx = -1;
-  let prevLowPrice = Infinity;
-  let currLowIdx = -1;
-  let currLowPrice = Infinity;
+  if (n < 20) return false;
 
-  for (let i = n - 1; i >= Math.max(0, n - 20); i--) {
-    if (candles[i].low < prevLowPrice) {
-      if (currLowIdx === -1) {
-        currLowIdx = i;
-        currLowPrice = candles[i].low;
-      } else if (candles[i].low < currLowPrice) {
-        prevLowIdx = currLowIdx;
-        prevLowPrice = currLowPrice;
-        currLowIdx = i;
-        currLowPrice = candles[i].low;
-      }
+  // Pass 1: find the lowest point in the most-recent 10 candles
+  let recentIdx = -1;
+  let recentPrice = Infinity;
+  for (let i = n - 1; i >= n - 10; i--) {
+    if (candles[i].low < recentPrice) {
+      recentIdx = i;
+      recentPrice = candles[i].low;
     }
   }
-  if (prevLowIdx === -1 || currLowIdx === -1) return false;
-  // Price: curr low < prev low  (lower low)
-  // RSI:   curr RSI > prev RSI  (higher low) → divergence
-  return (
-    currLowPrice < prevLowPrice &&
-    rsiValues[currLowIdx] > rsiValues[prevLowIdx]
-  );
+  if (recentIdx === -1) return false;
+
+  // Pass 2: find the lowest point in the 10 candles before that window
+  let prevIdx = -1;
+  let prevPrice = Infinity;
+  const pass2End = Math.max(0, n - 20);
+  for (let i = n - 11; i >= pass2End; i--) {
+    if (candles[i].low < prevPrice) {
+      prevIdx = i;
+      prevPrice = candles[i].low;
+    }
+  }
+  if (prevIdx === -1) return false;
+
+  // Bullish divergence: price lower low + RSI higher low
+  return recentPrice < prevPrice && rsiValues[recentIdx] > rsiValues[prevIdx];
 }
 
+/**
+ * Bearish divergence: most-recent swing high is higher in price but lower in RSI
+ * than the previous swing high (candles 10–20 back).
+ */
 export function hasBearishDivergence(candles: OHLCV[], rsiValues: number[]): boolean {
   const n = candles.length;
-  if (n < 10) return false;
-  let prevHighIdx = -1;
-  let prevHighPrice = -Infinity;
-  let currHighIdx = -1;
-  let currHighPrice = -Infinity;
+  if (n < 20) return false;
 
-  for (let i = n - 1; i >= Math.max(0, n - 20); i--) {
-    if (candles[i].high > prevHighPrice) {
-      if (currHighIdx === -1) {
-        currHighIdx = i;
-        currHighPrice = candles[i].high;
-      } else if (candles[i].high > currHighPrice) {
-        prevHighIdx = currHighIdx;
-        prevHighPrice = currHighPrice;
-        currHighIdx = i;
-        currHighPrice = candles[i].high;
-      }
+  // Pass 1: find the highest point in the most-recent 10 candles
+  let recentIdx = -1;
+  let recentPrice = -Infinity;
+  for (let i = n - 1; i >= n - 10; i--) {
+    if (candles[i].high > recentPrice) {
+      recentIdx = i;
+      recentPrice = candles[i].high;
     }
   }
-  if (prevHighIdx === -1 || currHighIdx === -1) return false;
-  return (
-    currHighPrice > prevHighPrice &&
-    rsiValues[currHighIdx] < rsiValues[prevHighIdx]
-  );
+  if (recentIdx === -1) return false;
+
+  // Pass 2: find the highest point in the 10 candles before that window
+  let prevIdx = -1;
+  let prevPrice = -Infinity;
+  const pass2End = Math.max(0, n - 20);
+  for (let i = n - 11; i >= pass2End; i--) {
+    if (candles[i].high > prevPrice) {
+      prevIdx = i;
+      prevPrice = candles[i].high;
+    }
+  }
+  if (prevIdx === -1) return false;
+
+  // Bearish divergence: price higher high + RSI lower high
+  return recentPrice > prevPrice && rsiValues[recentIdx] < rsiValues[prevIdx];
 }
 
 // ─── Session quality ──────────────────────────────────────────────────────────
@@ -311,9 +328,10 @@ export function sessionQualityScore(): number {
   if (dayOfWeek === 0 || dayOfWeek === 6) return 1;
 
   const hour = now.getUTCHours();
-  if (hour >= 13 && hour < 16) return 5; // NY/London overlap
-  if (hour >= 8 && hour < 12) return 5;  // London open
-  if (hour >= 13 && hour < 17) return 5; // NY open
-  if (hour >= 0 && hour < 8) return 2;   // Asia
-  return 3; // everything else
+  if (hour >= 13 && hour < 16) return 5; // NY/London overlap (highest quality)
+  if (hour >= 8  && hour < 12) return 5; // London open
+  if (hour >= 16 && hour < 17) return 4; // NY only (post-overlap)
+  if (hour >= 12 && hour < 13) return 3; // lunch (12–13 UTC)
+  if (hour >= 0  && hour < 8 ) return 2; // Asia
+  return 3; // everything else (late NY 17–24 UTC)
 }
