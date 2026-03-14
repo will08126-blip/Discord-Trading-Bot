@@ -300,16 +300,65 @@ export function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive = f
   const title = isLive ? '📡 Live Watchlist — BTC · ETH · SOL · XRP · PEPE' : '📊 Watchlist Scan — BTC · ETH · SOL · XRP · PEPE';
   const footer = isLive ? `🔄 Auto-refreshes every ${config.engine.scanIntervalMinutes} min — use /live stop to stop` : 'Use /check <symbol> for full signal details';
 
+  const fullValue = lines.join('\n') || 'No setups found across watchlist.';
+  // Discord embed field values must be ≤1024 chars — truncate if needed
+  const fieldValue = fullValue.length > 1024 ? fullValue.slice(0, 1021) + '…' : fullValue;
+
   return {
     embeds: [
       new EmbedBuilder()
         .setColor(0x5865f2)
         .setTitle(title)
-        .addFields({ name: LINE, value: lines.join('\n') || 'No setups found across watchlist.', inline: false })
+        .addFields({ name: LINE, value: fieldValue, inline: false })
         .setTimestamp()
         .setFooter({ text: footer }),
     ],
   };
+}
+
+// ─── Early profit alert embed ─────────────────────────────────────────────────
+
+export function buildEarlyProfitAlertEmbed(
+  position: ActivePosition,
+  currentPrice: number,
+  returnOnCapital: number   // fraction, e.g. 0.50 = 50%
+) {
+  const asset = position.signal.asset.split('/')[0];
+  const isLong = position.signal.direction === 'LONG';
+  const pnlPct = isLong
+    ? (currentPrice - position.entryPrice) / position.entryPrice
+    : (position.entryPrice - currentPrice) / position.entryPrice;
+
+  const embed = new EmbedBuilder()
+    .setColor(0xFFD700)
+    .setTitle(`💰 ${asset} ${position.signal.direction} — Early Profit Target Hit!`)
+    .setDescription(
+      `Your position has returned **+${(returnOnCapital * 100).toFixed(0)}%** on capital ` +
+      `at **${position.suggestedLeverage}x** leverage. Consider taking profits or tightening your stop.`
+    )
+    .addFields({
+      name: LINE,
+      value: [
+        `💹 **Current Price:** ${formatPrice(currentPrice, asset)}`,
+        `📍 **Entry:** ${formatPrice(position.entryPrice, asset)}`,
+        `📊 **Price Move:** +${(pnlPct * 100).toFixed(2)}%`,
+        `💰 **Capital Return (${position.suggestedLeverage}x):** +${(returnOnCapital * 100).toFixed(0)}%`,
+        `🎯 **Full TP:** ${formatPrice(position.currentTakeProfit, asset)}`,
+      ].join('\n'),
+      inline: false,
+    })
+    .setTimestamp()
+    .setFooter({ text: `Position ID: ${position.id.slice(0, 8)}` });
+
+  const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`closePosition:${position.id}`)
+      .setLabel('Close Position')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('💰')
+  );
+
+  return { embeds: [embed], components: [closeRow] };
 }
 
 // ─── Closed trade embed ────────────────────────────────────────────────────────

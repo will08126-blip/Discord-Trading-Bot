@@ -47,6 +47,7 @@ export async function onInteractionCreate(interaction: Interaction): Promise<voi
   // ── Button interactions ────────────────────────────────────────────────────
   if (interaction.isButton()) {
     const colonIdx = interaction.customId.indexOf(':');
+    if (colonIdx === -1) return; // malformed customId — ignore
     const action = interaction.customId.slice(0, colonIdx);
     const payload = interaction.customId.slice(colonIdx + 1);
 

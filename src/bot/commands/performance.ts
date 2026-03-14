@@ -18,6 +18,7 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: ChatInputCommandInteraction) {
   const period = (interaction.options.getString('period') ?? 'all') as 'today' | 'week' | 'all';
+  await interaction.deferReply();
   const allTrades = loadTrades();
 
   let trades = allTrades;
@@ -80,5 +81,5 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
 
   embed.setTimestamp();
-  await interaction.reply({ embeds: [embed] });
+  await interaction.editReply({ embeds: [embed] });
 }

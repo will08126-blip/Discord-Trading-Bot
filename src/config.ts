@@ -38,6 +38,14 @@ export const config = {
     maxLeverageScalp:  Number(optionalEnv('MAX_LEVERAGE_SCALP',  '50')),
     maxLeverageHybrid: Number(optionalEnv('MAX_LEVERAGE_HYBRID', '30')),
     maxLeverageSwing:  Number(optionalEnv('MAX_LEVERAGE_SWING',  '20')),
+
+    // Leverage-adjusted profit targets (fraction, e.g. 0.5 = 50% return on capital).
+    // With 25x leverage a 2% price move = 50% capital return, 4% move = 100% return.
+    //   earlyProfitAlertPct  – alert threshold; fires without closing the position
+    //   targetReturnPct      – sets the actual TP price on each confirmed position
+    // Set to 0 to disable the respective feature.
+    earlyProfitAlertPct: Number(optionalEnv('EARLY_PROFIT_ALERT_PCT', '0.5')),
+    targetReturnPct:     Number(optionalEnv('TARGET_RETURN_PCT',      '1.0')),
   },
 
   engine: {
