@@ -90,14 +90,14 @@ export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanRe
 
 // ─── Signal posting ───────────────────────────────────────────────────────────
 
-async function postSignal(signal: (typeof strategies)[0] extends { analyze: (...a: any) => infer R } ? Exclude<R, null> : never) {
+async function postSignal(signal: StrategySignal) {
   const channel = await discordClient.channels.fetch(config.discord.signalChannelId);
   if (!channel?.isTextBased()) return;
 
-  const msg = await (channel as TextChannel).send(buildSignalEmbed(signal as any));
-  addPendingSignal(signal as any);
-  markSignalSent(signal as any);
-  logger.info(`Signal posted: ${(signal as any).asset} ${(signal as any).direction} score=${(signal as any).score} [${(signal as any).tier}]`);
+  await (channel as TextChannel).send(buildSignalEmbed(signal));
+  addPendingSignal(signal);
+  markSignalSent(signal);
+  logger.info(`Signal posted: ${signal.asset} ${signal.direction} score=${signal.score} [${signal.tier}]`);
 }
 
 // ─── Position monitoring ──────────────────────────────────────────────────────
@@ -295,9 +295,18 @@ export function startScheduler() {
   logger.info(`Starting scan scheduler: every ${interval} min`);
 
   // Main scan: every N minutes
-  cron.schedule(`*/${interval} * * * *`, () => {
-    runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
-  });
+  // Cron minutes field only accepts 0-59; use setInterval for intervals >= 60
+  if (interval < 60) {
+    cron.schedule(`*/${interval} * * * *`, () => {
+      runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
+    });
+  } else {
+    const intervalMs = interval * 60 * 1000;
+    setInterval(() => {
+      runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
+    }, intervalMs);
+    logger.info(`Using setInterval for ${interval}-minute scan cadence`);
+  }
 
   // Daily summary: midnight UTC
   cron.schedule('0 0 * * *', () => {

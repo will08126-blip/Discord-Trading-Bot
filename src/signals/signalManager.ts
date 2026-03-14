@@ -20,7 +20,9 @@ const POSITIONS_FILE = path.join(config.paths.data, 'positions.json');
 function savePositions(): void {
   try {
     fs.mkdirSync(path.dirname(POSITIONS_FILE), { recursive: true });
-    fs.writeFileSync(POSITIONS_FILE, JSON.stringify([...activePositions.values()], null, 2));
+    const tmp = POSITIONS_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify([...activePositions.values()], null, 2));
+    fs.renameSync(tmp, POSITIONS_FILE);
   } catch (err) {
     logger.error('Failed to save active positions to disk:', err);
   }
@@ -356,10 +358,13 @@ export function attemptMomentumTPExtension(
 export function isDuplicateSignal(signal: StrategySignal): boolean {
   const key = `${signal.asset}:${signal.direction}:${signal.strategy}`;
   const lastSent = recentlySentAssets.get(key);
-  if (lastSent && Date.now() - lastSent < config.engine.duplicateWindowMs) {
-    return true;
+  const now = Date.now();
+  // Prune expired entry on access to prevent unbounded map growth
+  if (lastSent !== undefined && now - lastSent >= config.engine.duplicateWindowMs) {
+    recentlySentAssets.delete(key);
+    return false;
   }
-  return false;
+  return lastSent !== undefined;
 }
 
 export function markSignalSent(signal: StrategySignal): void {

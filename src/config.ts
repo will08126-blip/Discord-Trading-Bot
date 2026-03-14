@@ -18,7 +18,7 @@ export const config = {
     token: requireEnv('DISCORD_TOKEN'),
     clientId: requireEnv('DISCORD_CLIENT_ID'),
     signalChannelId: requireEnv('SIGNAL_CHANNEL_ID'),
-    summaryChannelId: requireEnv('SUMMARY_CHANNEL_ID'),
+    summaryChannelId: optionalEnv('SUMMARY_CHANNEL_ID', process.env['SIGNAL_CHANNEL_ID'] ?? ''),
   },
 
   // Public spot market data — no API key required

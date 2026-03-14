@@ -20,6 +20,16 @@ process.on('uncaughtException', (err: Error) => {
   process.exit(1); // Render will auto-restart the worker
 });
 
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received — shutting down gracefully');
+  // Give any in-flight async operations up to 5 seconds before exiting.
+  // All file writes are synchronous so they will complete before this fires.
+  setTimeout(() => {
+    logger.info('Graceful shutdown complete');
+    process.exit(0);
+  }, 5000).unref();
+});
+
 async function main() {
   logger.info('Starting Discord Trading Bot...');
 
@@ -42,6 +52,23 @@ async function main() {
 
   discordClient.on(Events.Error, (err) => {
     logger.error('Discord client error:', err);
+  });
+
+  discordClient.on(Events.ShardDisconnect, (closeEvent, shardId) => {
+    logger.warn(`Discord shard ${shardId} disconnected (code ${closeEvent.code})`);
+  });
+
+  discordClient.on(Events.ShardReconnecting, (shardId) => {
+    logger.info(`Discord shard ${shardId} reconnecting...`);
+  });
+
+  discordClient.on(Events.ShardResume, (shardId, replayedEvents) => {
+    logger.info(`Discord shard ${shardId} resumed (replayed ${replayedEvents} events)`);
+  });
+
+  discordClient.on(Events.Invalidated, () => {
+    logger.error('Discord session invalidated — restarting process');
+    process.exit(1); // Render auto-restarts; invalidated sessions cannot be recovered
   });
 
   // Login
