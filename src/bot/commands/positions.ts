@@ -14,10 +14,12 @@ export const data = new SlashCommandBuilder()
   .setDescription('List all currently tracked (confirmed) positions');
 
 export async function execute(interaction: ChatInputCommandInteraction) {
+  await interaction.deferReply();
+
   const positions = getAllActivePositions();
 
   if (positions.length === 0) {
-    await interaction.reply({ content: '📭 No active positions being tracked.', ephemeral: true });
+    await interaction.editReply({ content: '📭 No active positions being tracked.' });
     return;
   }
 
@@ -52,5 +54,5 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
 
-  await interaction.reply({ embeds: [embed], components: [row] });
+  await interaction.editReply({ embeds: [embed], components: [row] });
 }
