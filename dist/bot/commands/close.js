@@ -8,14 +8,14 @@ const embeds_1 = require("../embeds");
 exports.data = new discord_js_1.SlashCommandBuilder()
     .setName('close')
     .setDescription('Record that you manually closed a position')
-    .addStringOption((opt) => opt
-    .setName('id')
-    .setDescription('Position ID prefix (leave blank if only one trade is open)')
-    .setRequired(false))
     .addNumberOption((opt) => opt
     .setName('price')
     .setDescription('The price at which you exited the trade')
-    .setRequired(true));
+    .setRequired(true))
+    .addStringOption((opt) => opt
+    .setName('id')
+    .setDescription('Position ID prefix (leave blank if only one trade is open)')
+    .setRequired(false));
 async function execute(interaction) {
     const shortId = interaction.options.getString('id')?.trim() ?? null;
     const exitPrice = interaction.options.getNumber('price', true);

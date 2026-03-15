@@ -5,17 +5,17 @@ import { buildClosedTradeEmbed } from '../embeds';
 export const data = new SlashCommandBuilder()
   .setName('close')
   .setDescription('Record that you manually closed a position')
-  .addStringOption((opt) =>
-    opt
-      .setName('id')
-      .setDescription('Position ID prefix (leave blank if only one trade is open)')
-      .setRequired(false)
-  )
   .addNumberOption((opt) =>
     opt
       .setName('price')
       .setDescription('The price at which you exited the trade')
       .setRequired(true)
+  )
+  .addStringOption((opt) =>
+    opt
+      .setName('id')
+      .setDescription('Position ID prefix (leave blank if only one trade is open)')
+      .setRequired(false)
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
