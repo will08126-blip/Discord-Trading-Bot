@@ -12,54 +12,46 @@ const CANDLE_LIMIT = 200; // enough for all indicators
 // All three support BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, PEPE/USDT with no API key.
 const EXCHANGE_PRIORITY = ['binance', 'gate', 'mexc'];
 
+// One reusable CCXT instance per exchange — preserves per-instance rate-limit tracking.
+// withFallback() loops through these with a LOCAL index so concurrent calls cannot
+// corrupt each other's state (the old single currentExchangeIndex was not concurrency-safe).
+const exchangePool: Record<string, any> = {};
+
 function resolveStartIndex(): number {
   const id = config.engine.exchangeId;
   const idx = EXCHANGE_PRIORITY.indexOf(id);
   return idx >= 0 ? idx : 0;
 }
 
-let currentExchangeIndex = resolveStartIndex();
-let exchange: any = null;
-
-function getExchange(): any {
-  if (!exchange) {
-    const id = EXCHANGE_PRIORITY[currentExchangeIndex];
-    logger.info(`[marketData] Using exchange: ${id}`);
-    exchange = new ccxt[id]({
+function getPooledExchange(id: string): any {
+  if (!exchangePool[id]) {
+    logger.info(`[marketData] Initialising exchange: ${id}`);
+    exchangePool[id] = new ccxt[id]({
       enableRateLimit: true,
       timeout: 10000, // 10 s — fail fast rather than hanging indefinitely
     });
   }
-  return exchange;
+  return exchangePool[id];
 }
 
 function isAvailabilityError(err: unknown): boolean {
   return err instanceof ccxt.ExchangeNotAvailable || err instanceof ccxt.NetworkError;
 }
 
-function advanceExchange(err: unknown): boolean {
-  if (currentExchangeIndex >= EXCHANGE_PRIORITY.length - 1) return false;
-  const failed = EXCHANGE_PRIORITY[currentExchangeIndex];
-  currentExchangeIndex++;
-  exchange = null; // force fresh instance on next getExchange() call
-  logger.warn(
-    `[marketData] Exchange "${failed}" unavailable (${(err as Error).message?.slice(0, 80)}). ` +
-      `Falling back to "${EXCHANGE_PRIORITY[currentExchangeIndex]}".`
-  );
-  return true;
-}
-
+// Each call owns its own local index — safe to run concurrently.
 async function withFallback<T>(fn: (ex: any) => Promise<T>): Promise<T> {
-  currentExchangeIndex = resolveStartIndex(); // reset so each call starts from the preferred exchange
-  exchange = null;                            // discard any stale instance from a previous failure
   let lastErr: unknown;
-  while (currentExchangeIndex < EXCHANGE_PRIORITY.length) {
+  for (let i = resolveStartIndex(); i < EXCHANGE_PRIORITY.length; i++) {
+    const id = EXCHANGE_PRIORITY[i];
     try {
-      return await fn(getExchange());
+      return await fn(getPooledExchange(id));
     } catch (err) {
       lastErr = err;
       if (!isAvailabilityError(err)) throw err; // non-availability error — don't cascade
-      if (!advanceExchange(err)) break; // no more exchanges to try
+      logger.warn(
+        `[marketData] Exchange "${id}" unavailable (${(err as Error).message?.slice(0, 80)}). ` +
+          `Falling back to "${EXCHANGE_PRIORITY[i + 1] ?? 'none'}".`
+      );
     }
   }
   throw lastErr;
