@@ -52,9 +52,15 @@ const checkCmd = __importStar(require("./check"));
 const watchlistCmd = __importStar(require("./watchlist"));
 const liveCmd = __importStar(require("./live"));
 const tradeStatusCmd = __importStar(require("./tradeStatus"));
+// Singular alias — same execute handler, different SlashCommandBuilder (different name)
+const positionAliasCmd = {
+    data: positionsCmd.dataAlias,
+    execute: positionsCmd.execute,
+};
 exports.commands = new Map([
     ['status', statusCmd],
     ['positions', positionsCmd],
+    ['position', positionAliasCmd], // singular alias so both /position and /positions work
     ['close', closeCmd],
     ['performance', performanceCmd],
     ['toggle', toggleCmd],
@@ -71,10 +77,20 @@ exports.commands = new Map([
 /** Deploy (register) all slash commands with Discord's API */
 async function deployCommands(guildId) {
     const rest = new discord_js_1.REST().setToken(config_1.config.discord.token);
-    const commandBodies = [...exports.commands.values()].map((c) => c.data.toJSON());
+    // Deduplicate by command name — prevents double-registering if same data object is
+    // referenced by multiple map entries. Each Discord command name must be unique.
+    const seen = new Set();
+    const commandBodies = [...exports.commands.values()]
+        .filter((c) => {
+        if (seen.has(c.data.name))
+            return false;
+        seen.add(c.data.name);
+        return true;
+    })
+        .map((c) => c.data.toJSON());
     try {
         if (guildId) {
-            // Guild-scoped (instant update, good for testing)
+            // Guild-scoped (instant update, available immediately)
             await rest.put(discord_js_1.Routes.applicationGuildCommands(config_1.config.discord.clientId, guildId), { body: commandBodies });
             logger_1.logger.info(`Deployed ${commandBodies.length} guild commands to guild ${guildId}`);
         }
@@ -86,6 +102,7 @@ async function deployCommands(guildId) {
     }
     catch (err) {
         logger_1.logger.error('Failed to deploy commands:', err);
+        throw err; // re-throw so ready.ts can surface the failure
     }
 }
 //# sourceMappingURL=index.js.map

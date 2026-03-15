@@ -44,7 +44,7 @@ export const config = {
     //   earlyProfitAlertPct  – alert threshold; fires without closing the position
     //   targetReturnPct      – sets the actual TP price on each confirmed position
     // Set to 0 to disable the respective feature.
-    earlyProfitAlertPct: Number(optionalEnv('EARLY_PROFIT_ALERT_PCT', '0.5')),
+    earlyProfitAlertPct: Number(optionalEnv('EARLY_PROFIT_ALERT_PCT', '0.25')),
     targetReturnPct:     Number(optionalEnv('TARGET_RETURN_PCT',      '1.0')),
   },
 

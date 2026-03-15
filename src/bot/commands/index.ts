@@ -22,9 +22,16 @@ export interface Command {
   execute: (interaction: any) => Promise<void>;
 }
 
+// Singular alias — same execute handler, different SlashCommandBuilder (different name)
+const positionAliasCmd: Command = {
+  data: positionsCmd.dataAlias,
+  execute: positionsCmd.execute,
+};
+
 export const commands = new Map<string, Command>([
   ['status', statusCmd],
   ['positions', positionsCmd],
+  ['position',  positionAliasCmd],  // singular alias so both /position and /positions work
   ['close', closeCmd],
   ['performance', performanceCmd],
   ['toggle', toggleCmd],
@@ -42,11 +49,21 @@ export const commands = new Map<string, Command>([
 /** Deploy (register) all slash commands with Discord's API */
 export async function deployCommands(guildId?: string): Promise<void> {
   const rest = new REST().setToken(config.discord.token);
-  const commandBodies = [...commands.values()].map((c) => c.data.toJSON());
+
+  // Deduplicate by command name — prevents double-registering if same data object is
+  // referenced by multiple map entries. Each Discord command name must be unique.
+  const seen = new Set<string>();
+  const commandBodies = [...commands.values()]
+    .filter((c) => {
+      if (seen.has(c.data.name)) return false;
+      seen.add(c.data.name);
+      return true;
+    })
+    .map((c) => c.data.toJSON());
 
   try {
     if (guildId) {
-      // Guild-scoped (instant update, good for testing)
+      // Guild-scoped (instant update, available immediately)
       await rest.put(
         Routes.applicationGuildCommands(config.discord.clientId, guildId),
         { body: commandBodies }
@@ -62,5 +79,6 @@ export async function deployCommands(guildId?: string): Promise<void> {
     }
   } catch (err) {
     logger.error('Failed to deploy commands:', err);
+    throw err; // re-throw so ready.ts can surface the failure
   }
 }

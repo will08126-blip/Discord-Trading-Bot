@@ -21,7 +21,7 @@ exports.config = {
         token: requireEnv('DISCORD_TOKEN'),
         clientId: requireEnv('DISCORD_CLIENT_ID'),
         signalChannelId: requireEnv('SIGNAL_CHANNEL_ID'),
-        summaryChannelId: requireEnv('SUMMARY_CHANNEL_ID'),
+        summaryChannelId: optionalEnv('SUMMARY_CHANNEL_ID', process.env['SIGNAL_CHANNEL_ID'] ?? ''),
     },
     // Public spot market data — no API key required
     anthropic: {
@@ -43,7 +43,7 @@ exports.config = {
         //   earlyProfitAlertPct  – alert threshold; fires without closing the position
         //   targetReturnPct      – sets the actual TP price on each confirmed position
         // Set to 0 to disable the respective feature.
-        earlyProfitAlertPct: Number(optionalEnv('EARLY_PROFIT_ALERT_PCT', '0.5')),
+        earlyProfitAlertPct: Number(optionalEnv('EARLY_PROFIT_ALERT_PCT', '0.25')),
         targetReturnPct: Number(optionalEnv('TARGET_RETURN_PCT', '1.0')),
     },
     engine: {
