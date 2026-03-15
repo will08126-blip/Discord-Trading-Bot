@@ -12,16 +12,17 @@ exports.data = new discord_js_1.SlashCommandBuilder()
     .setName('status')
     .setDescription('Show bot status: regime, pending signals, open positions, and daily P&L');
 async function execute(interaction) {
-    await interaction.deferReply();
+    // Use reply() directly — all data is in-memory so this completes in <100ms,
+    // well within Discord's 3-second interaction window. Avoids the deferReply+editReply
+    // two-step chain that can silently fail when either network call errors.
     const errors = [];
-    // 1. Load bot state — defensive
-    let state;
+    // 1. Load bot state with inline fallback to avoid TS definite-assignment issues
+    let state = { enabled: false, dailyLoss: 0, dailyLossDate: '', strategyWeights: {} };
     try {
         state = (0, adaptation_1.loadState)();
     }
     catch (err) {
         errors.push(`loadState: ${String(err)}`);
-        state = { enabled: false, dailyLoss: 0, dailyLossDate: '', strategyWeights: {} };
     }
     // 2. Signal/position counts — in-memory reads
     let pending = [];
@@ -69,6 +70,18 @@ async function execute(interaction) {
     catch (err) {
         errors.push(`strategyWeights: ${String(err)}`);
     }
+    // 6. Active position summary
+    let positionSummary = 'None';
+    if (active.length > 0) {
+        positionSummary = active
+            .map((p) => {
+            const dir = p.signal.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+            const asset = p.signal.asset.split('/')[0];
+            const heldMin = Math.round((Date.now() - p.confirmedAt) / 60000);
+            return `${dir} **${asset}** @ ${p.entryPrice.toFixed(2)} — held ${heldMin}m`;
+        })
+            .join('\n');
+    }
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(state.enabled ? 0x00ff87 : 0xff4444)
         .setTitle(`🤖 Bot Status — ${state.enabled ? '🟢 Active' : '🔴 Disabled'}`)
@@ -82,7 +95,11 @@ async function execute(interaction) {
         inline: false,
     }, {
         name: '📊 Signals',
-        value: `Pending: **${pending.length}**  |  Active positions: **${active.length}** / ${config_1.config.trading.maxOpenPositions}`,
+        value: `Pending: **${pending.length}**  |  Active: **${active.length}** / ${config_1.config.trading.maxOpenPositions}`,
+        inline: false,
+    }, {
+        name: '📈 Open Positions',
+        value: positionSummary,
         inline: false,
     }, {
         name: '⚖️ Strategy Weights',
@@ -91,14 +108,16 @@ async function execute(interaction) {
     }, {
         name: '⚙️ Settings',
         value: [
-            `Min score: ${config_1.config.trading.minScoreThreshold}`,
-            `Risk: ELITE 2% | STRONG 1.5% | MEDIUM 1% of capital`,
-            `Max lev (scalp): ${config_1.config.trading.maxLeverageScalp}x`,
-            `Max lev (swing): ${config_1.config.trading.maxLeverageSwing}x`,
-            `Scan interval: ${config_1.config.engine.scanIntervalMinutes} min`,
-        ].join('  |  '),
+            `Min score: **${config_1.config.trading.minScoreThreshold}**`,
+            `Max positions: **${config_1.config.trading.maxOpenPositions}**`,
+            `Lev caps: scalp **${config_1.config.trading.maxLeverageScalp}x** | swing **${config_1.config.trading.maxLeverageSwing}x**`,
+            `Scan: every **${config_1.config.engine.scanIntervalMinutes} min**`,
+            `Profit alert: **${(config_1.config.trading.earlyProfitAlertPct * 100).toFixed(0)}%** capital return`,
+            `Auto-close TP: **${(config_1.config.trading.targetReturnPct * 100).toFixed(0)}%** capital return`,
+        ].join('\n'),
         inline: false,
     })
+        .setFooter({ text: `Type /positions to see detailed position info  •  /help for all commands` })
         .setTimestamp();
     if (errors.length > 0) {
         embed.addFields({
@@ -107,6 +126,6 @@ async function execute(interaction) {
             inline: false,
         });
     }
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.reply({ embeds: [embed] });
 }
 //# sourceMappingURL=status.js.map

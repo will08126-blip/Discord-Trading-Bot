@@ -7,6 +7,7 @@ exports.buildTPUpdateEmbed = buildTPUpdateEmbed;
 exports.buildCheckSummaryEmbed = buildCheckSummaryEmbed;
 exports.buildWatchlistEmbed = buildWatchlistEmbed;
 exports.buildEarlyProfitAlertEmbed = buildEarlyProfitAlertEmbed;
+exports.buildPositionHealthEmbed = buildPositionHealthEmbed;
 exports.buildClosedTradeEmbed = buildClosedTradeEmbed;
 const discord_js_1 = require("discord.js");
 const riskCalculator_1 = require("../risk/riskCalculator");
@@ -280,6 +281,79 @@ function buildEarlyProfitAlertEmbed(position, currentPrice, returnOnCapital // f
         .setLabel('Close Position')
         .setStyle(discord_js_1.ButtonStyle.Success)
         .setEmoji('💰'));
+    return { embeds: [embed], components: [closeRow] };
+}
+// ─── Position health update embed ─────────────────────────────────────────────
+// Posted when price moves ≥1.5% from the last update, giving the user a quick
+// verdict on whether the trade is still healthy.
+function buildPositionHealthEmbed(position, currentPrice, rsi14, // current RSI(14) value on 5m candles
+ema9 // current EMA(9) value on 5m candles
+) {
+    const asset = position.signal.asset.split('/')[0];
+    const isLong = position.signal.direction === 'LONG';
+    const entry = position.entryPrice;
+    // Live P&L from entry
+    const pnlPct = isLong
+        ? (currentPrice - entry) / entry
+        : (entry - currentPrice) / entry;
+    const stopDist = Math.abs(entry - position.currentStopLoss) / entry;
+    const rMultiple = stopDist > 0 ? pnlPct / stopDist : 0;
+    const capitalReturn = pnlPct * position.suggestedLeverage;
+    // Price vs EMA — most reliable trend-intact signal
+    const priceAboveEma = currentPrice > ema9;
+    const trendIntact = isLong ? priceAboveEma : !priceAboveEma;
+    const emaStatus = trendIntact
+        ? `✅ Price ${isLong ? 'above' : 'below'} EMA(9) — trend intact`
+        : `⚠️ Price ${isLong ? 'below' : 'above'} EMA(9) — momentum weakening`;
+    // RSI status
+    const rsiOverextended = isLong ? rsi14 > 75 : rsi14 < 25;
+    const rsiWeak = isLong ? rsi14 < 40 : rsi14 > 60;
+    const rsiTag = rsiOverextended ? '⚠️ Overextended' : rsiWeak ? '⚠️ Weakening' : '✅ Healthy';
+    // Overall verdict
+    let verdict;
+    let color;
+    if (pnlPct > 0 && trendIntact && !rsiOverextended) {
+        verdict = '✅ **Still valid** — trade is healthy, hold your position.';
+        color = 0x00cc44;
+    }
+    else if (rMultiple < -0.5 || (!trendIntact && rsiWeak)) {
+        verdict = '🔴 **Consider exiting** — momentum has turned against this trade.';
+        color = 0xff2200;
+    }
+    else {
+        verdict = '⚠️ **Watch closely** — conditions are mixed, be ready to act.';
+        color = 0xff8800;
+    }
+    const pnlSign = pnlPct >= 0 ? '+' : '';
+    const capitalSign = capitalReturn >= 0 ? '+' : '';
+    const embed = new discord_js_1.EmbedBuilder()
+        .setColor(color)
+        .setTitle(`📡 ${asset} ${position.signal.direction} — Trade Health Check`)
+        .setDescription(verdict)
+        .addFields({
+        name: '💰 Live P&L',
+        value: [
+            `Price:   **${(0, riskCalculator_1.formatPrice)(currentPrice, asset)}**  (entry: ${(0, riskCalculator_1.formatPrice)(entry, asset)})`,
+            `P&L:     **${pnlSign}${(pnlPct * 100).toFixed(2)}%**  (${pnlSign}${rMultiple.toFixed(2)}R)`,
+            `Capital: **${capitalSign}${(capitalReturn * 100).toFixed(0)}%** at ${position.suggestedLeverage}x`,
+        ].join('\n'),
+        inline: false,
+    }, {
+        name: '📈 Technicals (5m)',
+        value: [
+            emaStatus,
+            `RSI(14): ${isNaN(rsi14) ? 'N/A' : rsi14.toFixed(1)}  ${rsiTag}`,
+            `SL: ${(0, riskCalculator_1.formatPrice)(position.currentStopLoss, asset)}  |  TP: ${(0, riskCalculator_1.formatPrice)(position.currentTakeProfit, asset)}`,
+        ].join('\n'),
+        inline: false,
+    })
+        .setTimestamp()
+        .setFooter({ text: `Position ID: ${position.id.slice(0, 8)} • Use /position to view all open trades` });
+    const closeRow = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+        .setCustomId(`closePosition:${position.id}`)
+        .setLabel('Close Position')
+        .setStyle(discord_js_1.ButtonStyle.Danger)
+        .setEmoji('🔴'));
     return { embeds: [embed], components: [closeRow] };
 }
 // ─── Closed trade embed ────────────────────────────────────────────────────────

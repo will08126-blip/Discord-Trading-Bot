@@ -1,15 +1,20 @@
-import type { Client } from 'discord.js';
-import { deployCommands } from '../commands/index';
+import type { Client, TextChannel } from 'discord.js';
+import { EmbedBuilder } from 'discord.js';
+import { deployCommands, commands } from '../commands/index';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 
 export async function onReady(client: Client): Promise<void> {
   logger.info(`Discord bot ready — logged in as ${client.user?.tag}`);
 
-  // Determine guild ID for command registration.
+  // ── Determine guild ID for command registration ────────────────────────────
   // Guild-scoped commands are available INSTANTLY; global commands take up to 1 hour.
-  // Strategy: use DISCORD_GUILD_ID env var if set, otherwise auto-detect from the
-  // signal channel so we always get instant registration without manual config.
+  // Strategy:
+  //   1. Use DISCORD_GUILD_ID env var if set (explicit, most reliable)
+  //   2. Auto-detect from signal channel guildId
+  //   3. Fallback: first guild in the bot's guild cache (works when bot is in 1 server)
+  //   4. Last resort: global deployment (1h delay — avoid if possible)
+
   let guildId: string | undefined = process.env.DISCORD_GUILD_ID || undefined;
 
   if (!guildId) {
@@ -17,7 +22,7 @@ export async function onReady(client: Client): Promise<void> {
       const channel = await client.channels.fetch(config.discord.signalChannelId);
       if (channel && 'guildId' in channel && typeof (channel as any).guildId === 'string') {
         guildId = (channel as any).guildId as string;
-        logger.info(`Auto-detected guild ID ${guildId} from signal channel — commands will be available instantly`);
+        logger.info(`Auto-detected guild ID ${guildId} from signal channel — commands will be instant`);
       }
     } catch (err) {
       logger.warn('Could not auto-detect guild ID from signal channel:', err);
@@ -26,9 +31,56 @@ export async function onReady(client: Client): Promise<void> {
     logger.info(`DISCORD_GUILD_ID set — deploying guild-scoped commands (instant)`);
   }
 
+  // Fallback: use first guild in cache (reliable when bot is in exactly one server)
   if (!guildId) {
-    logger.warn('No guild ID available — falling back to global commands (up to 1h propagation)');
+    const firstGuild = client.guilds.cache.first();
+    if (firstGuild) {
+      guildId = firstGuild.id;
+      logger.info(`Guild ID fallback — using first cached guild ${guildId}`);
+    }
   }
 
-  await deployCommands(guildId);
+  if (!guildId) {
+    logger.warn('No guild ID found — falling back to global commands (up to 1h propagation)');
+  }
+
+  // ── Deploy commands ────────────────────────────────────────────────────────
+  let deployError: string | null = null;
+  try {
+    await deployCommands(guildId);
+  } catch (err) {
+    deployError = String(err);
+    logger.error('Command deployment failed:', err);
+  }
+
+  // ── Post startup confirmation to signal channel ────────────────────────────
+  // This lets the user see in Discord that commands are ready and what they're called.
+  try {
+    const channel = await client.channels.fetch(config.discord.signalChannelId);
+    if (!channel?.isTextBased()) return;
+
+    const commandList = [...commands.keys()]
+      .map((name) => `\`/${name}\``)
+      .join('  ');
+
+    const embed = new EmbedBuilder()
+      .setColor(deployError ? 0xff4444 : 0x00ff87)
+      .setTitle(deployError ? '⚠️ Bot Online — Command Registration Failed' : '✅ Bot Online — Commands Ready')
+      .setDescription(
+        deployError
+          ? `Commands could not be registered: \`${deployError}\`\n\nSlash commands may not be available. Check the bot logs.`
+          : [
+              `All slash commands are now ${guildId ? '**instantly available**' : 'registered globally (may take up to 1h)'}.`,
+              '',
+              '**Available commands:**',
+              commandList,
+            ].join('\n')
+      )
+      .setFooter({ text: `Logged in as ${client.user?.tag}` })
+      .setTimestamp();
+
+    await (channel as TextChannel).send({ embeds: [embed] });
+  } catch (err) {
+    logger.warn('Could not post startup confirmation message:', err);
+  }
 }

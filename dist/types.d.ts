@@ -68,6 +68,8 @@ export interface ActivePosition {
     lastSLTPUpdateAt: number;
     tpExtensionCount: number;
     exitAlertSent: boolean;
+    lastHealthUpdatePrice?: number;
+    lastHealthUpdateAt?: number;
 }
 export interface ClosedTrade extends ActivePosition {
     exitPrice: number;

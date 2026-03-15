@@ -24,6 +24,11 @@ export declare function buildEarlyProfitAlertEmbed(position: ActivePosition, cur
     embeds: EmbedBuilder[];
     components: ActionRowBuilder<ButtonBuilder>[];
 };
+export declare function buildPositionHealthEmbed(position: ActivePosition, currentPrice: number, rsi14: number, // current RSI(14) value on 5m candles
+ema9: number): {
+    embeds: EmbedBuilder[];
+    components: ActionRowBuilder<ButtonBuilder>[];
+};
 export declare function buildClosedTradeEmbed(trade: ClosedTrade): {
     embeds: EmbedBuilder[];
 };

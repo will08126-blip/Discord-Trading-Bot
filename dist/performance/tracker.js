@@ -35,7 +35,9 @@ function loadTrades() {
 }
 function saveTrades(trades) {
     ensureDataDir();
-    fs_1.default.writeFileSync(config_1.config.paths.tradesFile, JSON.stringify(trades, null, 2));
+    const tmp = config_1.config.paths.tradesFile + '.tmp';
+    fs_1.default.writeFileSync(tmp, JSON.stringify(trades, null, 2));
+    fs_1.default.renameSync(tmp, config_1.config.paths.tradesFile);
 }
 function addTrade(trade) {
     const trades = loadTrades();

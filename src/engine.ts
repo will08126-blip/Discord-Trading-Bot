@@ -28,11 +28,19 @@ import {
   buildExitAlertEmbed,
   buildClosedTradeEmbed,
   buildEarlyProfitAlertEmbed,
+  buildPositionHealthEmbed,
 } from './bot/embeds';
 import { generateDailySummary } from './llm/summaries';
+import { rsi, ema } from './indicators/indicators';
 import { config } from './config';
 import { logger } from './utils/logger';
 import type { Asset, MultiTimeframeData, RegimeResult, StrategySignal } from './types';
+
+// Minimum price move (fraction) before posting a health update for an active position.
+// 0.015 = 1.5% — meaningful enough to warrant a re-assessment without being too noisy.
+const HEALTH_UPDATE_THRESHOLD = 0.015;
+// Minimum time between health updates for the same position (ms) — prevents spam on volatile candles
+const HEALTH_UPDATE_MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
 const strategies = [
   new TrendPullbackStrategy(),
@@ -136,6 +144,36 @@ async function monitorActivePositions() {
               buildEarlyProfitAlertEmbed(position, currentPrice, capitalReturn)
             );
           }
+        }
+      }
+
+      // ── Position health update on significant price moves ──────────────────
+      // When price moves ≥1.5% from the last update price, post a health check
+      // embed telling the user if the trade still looks valid. Minimum 10-minute
+      // gap between updates to avoid spamming during volatile candles.
+      const refPrice = position.lastHealthUpdatePrice ?? position.entryPrice;
+      const priceMoveSinceUpdate = Math.abs(currentPrice - refPrice) / refPrice;
+      const timeSinceUpdate = Date.now() - (position.lastHealthUpdateAt ?? 0);
+
+      if (priceMoveSinceUpdate >= HEALTH_UPDATE_THRESHOLD
+          && timeSinceUpdate >= HEALTH_UPDATE_MIN_INTERVAL_MS) {
+        try {
+          const rsiVals = rsi(candles5m, 14);
+          const emaVals = ema(candles5m, 9);
+          const currentRsi = rsiVals[rsiVals.length - 1] ?? NaN;
+          const currentEma = emaVals[emaVals.length - 1] ?? NaN;
+
+          position.lastHealthUpdatePrice = currentPrice;
+          position.lastHealthUpdateAt = Date.now();
+
+          const healthChannel = await discordClient.channels.fetch(position.channelId);
+          if (healthChannel?.isTextBased()) {
+            await (healthChannel as TextChannel).send(
+              buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma)
+            );
+          }
+        } catch (healthErr) {
+          logger.warn(`Health update failed for position ${position.id}:`, healthErr);
         }
       }
 

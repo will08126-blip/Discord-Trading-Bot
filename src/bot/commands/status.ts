@@ -11,17 +11,18 @@ export const data = new SlashCommandBuilder()
   .setDescription('Show bot status: regime, pending signals, open positions, and daily P&L');
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-  await interaction.deferReply();
+  // Use reply() directly — all data is in-memory so this completes in <100ms,
+  // well within Discord's 3-second interaction window. Avoids the deferReply+editReply
+  // two-step chain that can silently fail when either network call errors.
 
   const errors: string[] = [];
 
-  // 1. Load bot state — defensive
-  let state: BotState;
+  // 1. Load bot state with inline fallback to avoid TS definite-assignment issues
+  let state: BotState = { enabled: false, dailyLoss: 0, dailyLossDate: '', strategyWeights: {} };
   try {
     state = loadState();
   } catch (err) {
     errors.push(`loadState: ${String(err)}`);
-    state = { enabled: false, dailyLoss: 0, dailyLossDate: '', strategyWeights: {} };
   }
 
   // 2. Signal/position counts — in-memory reads
@@ -70,6 +71,19 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     errors.push(`strategyWeights: ${String(err)}`);
   }
 
+  // 6. Active position summary
+  let positionSummary = 'None';
+  if (active.length > 0) {
+    positionSummary = active
+      .map((p) => {
+        const dir = p.signal.direction === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+        const asset = p.signal.asset.split('/')[0];
+        const heldMin = Math.round((Date.now() - p.confirmedAt) / 60000);
+        return `${dir} **${asset}** @ ${p.entryPrice.toFixed(2)} — held ${heldMin}m`;
+      })
+      .join('\n');
+  }
+
   const embed = new EmbedBuilder()
     .setColor(state.enabled ? 0x00ff87 : 0xff4444)
     .setTitle(`🤖 Bot Status — ${state.enabled ? '🟢 Active' : '🔴 Disabled'}`)
@@ -86,7 +100,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       },
       {
         name: '📊 Signals',
-        value: `Pending: **${pending.length}**  |  Active positions: **${active.length}** / ${config.trading.maxOpenPositions}`,
+        value: `Pending: **${pending.length}**  |  Active: **${active.length}** / ${config.trading.maxOpenPositions}`,
+        inline: false,
+      },
+      {
+        name: '📈 Open Positions',
+        value: positionSummary,
         inline: false,
       },
       {
@@ -97,15 +116,17 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       {
         name: '⚙️ Settings',
         value: [
-          `Min score: ${config.trading.minScoreThreshold}`,
-          `Risk: ELITE 2% | STRONG 1.5% | MEDIUM 1% of capital`,
-          `Max lev (scalp): ${config.trading.maxLeverageScalp}x`,
-          `Max lev (swing): ${config.trading.maxLeverageSwing}x`,
-          `Scan interval: ${config.engine.scanIntervalMinutes} min`,
-        ].join('  |  '),
+          `Min score: **${config.trading.minScoreThreshold}**`,
+          `Max positions: **${config.trading.maxOpenPositions}**`,
+          `Lev caps: scalp **${config.trading.maxLeverageScalp}x** | swing **${config.trading.maxLeverageSwing}x**`,
+          `Scan: every **${config.engine.scanIntervalMinutes} min**`,
+          `Profit alert: **${(config.trading.earlyProfitAlertPct * 100).toFixed(0)}%** capital return`,
+          `Auto-close TP: **${(config.trading.targetReturnPct * 100).toFixed(0)}%** capital return`,
+        ].join('\n'),
         inline: false,
       }
     )
+    .setFooter({ text: `Type /positions to see detailed position info  •  /help for all commands` })
     .setTimestamp();
 
   if (errors.length > 0) {
@@ -116,5 +137,5 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     });
   }
 
-  await interaction.editReply({ embeds: [embed] });
+  await interaction.reply({ embeds: [embed] });
 }

@@ -19,8 +19,14 @@ const signalManager_1 = require("./signals/signalManager");
 const adaptation_1 = require("./adaptation/adaptation");
 const embeds_1 = require("./bot/embeds");
 const summaries_1 = require("./llm/summaries");
+const indicators_1 = require("./indicators/indicators");
 const config_1 = require("./config");
 const logger_1 = require("./utils/logger");
+// Minimum price move (fraction) before posting a health update for an active position.
+// 0.015 = 1.5% — meaningful enough to warrant a re-assessment without being too noisy.
+const HEALTH_UPDATE_THRESHOLD = 0.015;
+// Minimum time between health updates for the same position (ms) — prevents spam on volatile candles
+const HEALTH_UPDATE_MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const strategies = [
     new trendPullback_1.TrendPullbackStrategy(),
     new breakoutRetest_1.BreakoutRetestStrategy(),
@@ -69,9 +75,15 @@ async function scanSingleAsset(symbol) {
 // ─── Signal posting ───────────────────────────────────────────────────────────
 async function postSignal(signal) {
     const channel = await client_1.discordClient.channels.fetch(config_1.config.discord.signalChannelId);
-    if (!channel?.isTextBased())
+    if (!channel) {
+        logger_1.logger.error(`postSignal: channel ${config_1.config.discord.signalChannelId} not found — check SIGNAL_CHANNEL_ID`);
         return;
-    const msg = await channel.send((0, embeds_1.buildSignalEmbed)(signal));
+    }
+    if (!channel.isTextBased()) {
+        logger_1.logger.error(`postSignal: channel ${config_1.config.discord.signalChannelId} is not a text channel (type=${channel.type})`);
+        return;
+    }
+    await channel.send((0, embeds_1.buildSignalEmbed)(signal));
     (0, signalManager_1.addPendingSignal)(signal);
     (0, signalManager_1.markSignalSent)(signal);
     logger_1.logger.info(`Signal posted: ${signal.asset} ${signal.direction} score=${signal.score} [${signal.tier}]`);
@@ -84,7 +96,7 @@ async function monitorActivePositions() {
     for (const position of positions) {
         try {
             const asset = position.signal.asset;
-            const candles5m = await (0, marketData_1.fetchOHLCV)(asset, '5m', 50);
+            const candles5m = await (0, marketData_1.fetchOHLCV)(asset, '5m');
             const currentPrice = candles5m[candles5m.length - 1].close;
             // ── Early profit alert ────────────────────────────────────────────
             // Fire once when capital return crosses earlyProfitAlertPct threshold.
@@ -101,6 +113,31 @@ async function monitorActivePositions() {
                     if (channel?.isTextBased()) {
                         await channel.send((0, embeds_1.buildEarlyProfitAlertEmbed)(position, currentPrice, capitalReturn));
                     }
+                }
+            }
+            // ── Position health update on significant price moves ──────────────────
+            // When price moves ≥1.5% from the last update price, post a health check
+            // embed telling the user if the trade still looks valid. Minimum 10-minute
+            // gap between updates to avoid spamming during volatile candles.
+            const refPrice = position.lastHealthUpdatePrice ?? position.entryPrice;
+            const priceMoveSinceUpdate = Math.abs(currentPrice - refPrice) / refPrice;
+            const timeSinceUpdate = Date.now() - (position.lastHealthUpdateAt ?? 0);
+            if (priceMoveSinceUpdate >= HEALTH_UPDATE_THRESHOLD
+                && timeSinceUpdate >= HEALTH_UPDATE_MIN_INTERVAL_MS) {
+                try {
+                    const rsiVals = (0, indicators_1.rsi)(candles5m, 14);
+                    const emaVals = (0, indicators_1.ema)(candles5m, 9);
+                    const currentRsi = rsiVals[rsiVals.length - 1] ?? NaN;
+                    const currentEma = emaVals[emaVals.length - 1] ?? NaN;
+                    position.lastHealthUpdatePrice = currentPrice;
+                    position.lastHealthUpdateAt = Date.now();
+                    const healthChannel = await client_1.discordClient.channels.fetch(position.channelId);
+                    if (healthChannel?.isTextBased()) {
+                        await healthChannel.send((0, embeds_1.buildPositionHealthEmbed)(position, currentPrice, currentRsi, currentEma));
+                    }
+                }
+                catch (healthErr) {
+                    logger_1.logger.warn(`Health update failed for position ${position.id}:`, healthErr);
                 }
             }
             const update = (0, signalManager_1.updateDynamicSLTP)(position, candles5m, currentPrice);
@@ -194,7 +231,7 @@ async function runScanCycle() {
                         continue;
                     }
                     if ((0, signalManager_1.isDuplicateSignal)(signal)) {
-                        logger_1.logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed (10min window)`);
+                        logger_1.logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed (30min window)`);
                         continue;
                     }
                     logger_1.logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} ✓ queued`);
@@ -209,10 +246,17 @@ async function runScanCycle() {
         const ranked = (0, votingEngine_1.filterAndRankSignals)(newSignals, config_1.config.trading.minScoreThreshold);
         const deduped = (0, votingEngine_1.deduplicateSignals)(ranked);
         logger_1.logger.info(`Scan complete: ${newSignals.length} raw → ${ranked.length} ranked → ${deduped.length} posted`);
+        let postedCount = 0;
         for (const signal of deduped) {
-            await postSignal(signal);
+            try {
+                await postSignal(signal);
+                postedCount++;
+            }
+            catch (err) {
+                logger_1.logger.error(`Failed to post signal for ${signal.asset} ${signal.direction}:`, err);
+            }
         }
-        return { signalCount: deduped.length, skipped: false };
+        return { signalCount: postedCount, skipped: false };
     }
     catch (err) {
         logger_1.logger.error('Scan cycle error:', err);
@@ -238,9 +282,19 @@ function startScheduler() {
     const interval = config_1.config.engine.scanIntervalMinutes;
     logger_1.logger.info(`Starting scan scheduler: every ${interval} min`);
     // Main scan: every N minutes
-    node_cron_1.default.schedule(`*/${interval} * * * *`, () => {
-        runScanCycle().catch((err) => logger_1.logger.error('Unhandled scan error:', err));
-    });
+    // Cron minutes field only accepts 0-59; use setInterval for intervals >= 60
+    if (interval < 60) {
+        node_cron_1.default.schedule(`*/${interval} * * * *`, () => {
+            runScanCycle().catch((err) => logger_1.logger.error('Unhandled scan error:', err));
+        });
+    }
+    else {
+        const intervalMs = interval * 60 * 1000;
+        setInterval(() => {
+            runScanCycle().catch((err) => logger_1.logger.error('Unhandled scan error:', err));
+        }, intervalMs);
+        logger_1.logger.info(`Using setInterval for ${interval}-minute scan cadence`);
+    }
     // Daily summary: midnight UTC
     node_cron_1.default.schedule('0 0 * * *', () => {
         postDailySummary().catch((err) => logger_1.logger.error('Unhandled summary error:', err));

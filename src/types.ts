@@ -81,6 +81,9 @@ export interface ActivePosition {
   lastSLTPUpdateAt: number;    // timestamp of last adjustment
   tpExtensionCount: number;    // momentum-based TP extensions used (max 2)
   exitAlertSent: boolean;
+  // Price-move health update tracking
+  lastHealthUpdatePrice?: number;  // price at time of last health update notification
+  lastHealthUpdateAt?: number;     // timestamp of last health update notification
 }
 
 export interface ClosedTrade extends ActivePosition {
