@@ -49,7 +49,9 @@ function loadState() {
 }
 function saveState(state) {
     ensureDataDir();
-    fs_1.default.writeFileSync(config_1.config.paths.stateFile, JSON.stringify(state, null, 2));
+    const tmp = config_1.config.paths.stateFile + '.tmp';
+    fs_1.default.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs_1.default.renameSync(tmp, config_1.config.paths.stateFile);
 }
 // ─── Adaptation logic ─────────────────────────────────────────────────────────
 /**

@@ -18,6 +18,15 @@ process.on('uncaughtException', (err) => {
     logger_1.logger.error('Uncaught exception — restarting:', err);
     process.exit(1); // Render will auto-restart the worker
 });
+process.on('SIGTERM', () => {
+    logger_1.logger.info('SIGTERM received — shutting down gracefully');
+    // Give any in-flight async operations up to 5 seconds before exiting.
+    // All file writes are synchronous so they will complete before this fires.
+    setTimeout(() => {
+        logger_1.logger.info('Graceful shutdown complete');
+        process.exit(0);
+    }, 5000).unref();
+});
 async function main() {
     logger_1.logger.info('Starting Discord Trading Bot...');
     // Restore active positions from the previous session before anything else
@@ -35,6 +44,19 @@ async function main() {
     client_1.discordClient.on(discord_js_1.Events.InteractionCreate, interactionCreate_1.onInteractionCreate);
     client_1.discordClient.on(discord_js_1.Events.Error, (err) => {
         logger_1.logger.error('Discord client error:', err);
+    });
+    client_1.discordClient.on(discord_js_1.Events.ShardDisconnect, (closeEvent, shardId) => {
+        logger_1.logger.warn(`Discord shard ${shardId} disconnected (code ${closeEvent.code})`);
+    });
+    client_1.discordClient.on(discord_js_1.Events.ShardReconnecting, (shardId) => {
+        logger_1.logger.info(`Discord shard ${shardId} reconnecting...`);
+    });
+    client_1.discordClient.on(discord_js_1.Events.ShardResume, (shardId, replayedEvents) => {
+        logger_1.logger.info(`Discord shard ${shardId} resumed (replayed ${replayedEvents} events)`);
+    });
+    client_1.discordClient.on(discord_js_1.Events.Invalidated, () => {
+        logger_1.logger.error('Discord session invalidated — restarting process');
+        process.exit(1); // Render auto-restarts; invalidated sessions cannot be recovered
     });
     // Login
     await client_1.discordClient.login(config_1.config.discord.token);
