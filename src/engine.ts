@@ -92,7 +92,14 @@ export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanRe
 
 async function postSignal(signal: StrategySignal) {
   const channel = await discordClient.channels.fetch(config.discord.signalChannelId);
-  if (!channel?.isTextBased()) return;
+  if (!channel) {
+    logger.error(`postSignal: channel ${config.discord.signalChannelId} not found — check SIGNAL_CHANNEL_ID`);
+    return;
+  }
+  if (!channel.isTextBased()) {
+    logger.error(`postSignal: channel ${config.discord.signalChannelId} is not a text channel (type=${channel.type})`);
+    return;
+  }
 
   await (channel as TextChannel).send(buildSignalEmbed(signal));
   addPendingSignal(signal);
@@ -109,7 +116,7 @@ async function monitorActivePositions() {
   for (const position of positions) {
     try {
       const asset = position.signal.asset as Asset;
-      const candles5m = await fetchOHLCV(asset, '5m', 50);
+      const candles5m = await fetchOHLCV(asset, '5m');
       const currentPrice = candles5m[candles5m.length - 1].close;
 
       // ── Early profit alert ────────────────────────────────────────────
@@ -244,7 +251,7 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
             continue;
           }
           if (isDuplicateSignal(signal)) {
-            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed (10min window)`);
+            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed (30min window)`);
             continue;
           }
 
@@ -262,11 +269,17 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
 
     logger.info(`Scan complete: ${newSignals.length} raw → ${ranked.length} ranked → ${deduped.length} posted`);
 
+    let postedCount = 0;
     for (const signal of deduped) {
-      await postSignal(signal);
+      try {
+        await postSignal(signal);
+        postedCount++;
+      } catch (err) {
+        logger.error(`Failed to post signal for ${signal.asset} ${signal.direction}:`, err);
+      }
     }
 
-    return { signalCount: deduped.length, skipped: false };
+    return { signalCount: postedCount, skipped: false };
   } catch (err) {
     logger.error('Scan cycle error:', err);
     return { signalCount: 0, skipped: false };
