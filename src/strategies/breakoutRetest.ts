@@ -147,7 +147,8 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
       const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
 
-      const entryLow = isLong ? level - lastAtr5m * 0.1 : entryMid - lastAtr5m * 0.2;
+      // Entry zone: symmetric 0.1× ATR buffer on both sides for both directions
+      const entryLow = isLong ? level - lastAtr5m * 0.1 : entryMid - lastAtr5m * 0.1;
       const entryHigh = isLong ? entryMid + lastAtr5m * 0.1 : level + lastAtr5m * 0.1;
 
       // ── Scoring ────────────────────────────────────────────────────────

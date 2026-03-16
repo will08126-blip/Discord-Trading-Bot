@@ -1,8 +1,9 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
-import { loadState } from '../../adaptation/adaptation';
+import { loadState, getMinScoreThreshold } from '../../adaptation/adaptation';
 import { getAllActivePositions, getAllPendingSignals } from '../../signals/signalManager';
 import { dailyPnl } from '../../performance/tracker';
 import { regimeLabel, getLastRegimes } from '../../regime/regimeDetector';
+import { getLastScanSummary } from '../../engine';
 import { config } from '../../config';
 import type { BotState } from '../../types';
 
@@ -44,7 +45,31 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     errors.push(`dailyPnl: ${String(err)}`);
   }
 
-  // 4. Regime cache — in-memory read
+  // 4. Last scan summary — in-memory read
+  let lastScanLines = '_No scan run yet_';
+  try {
+    const scan = getLastScanSummary();
+    if (scan) {
+      const ageMin = Math.round((Date.now() - scan.timestamp) / 60000);
+      if (scan.skipped) {
+        lastScanLines = `⏸ Skipped ${ageMin}m ago — ${scan.skipReason}`;
+      } else {
+        const assetLine = scan.assetResults.map(r => {
+          const regime = r.regime === 'POOR' ? '❌' : r.regime === 'TREND_UP' ? '📈' : r.regime === 'TREND_DOWN' ? '📉' : r.regime === 'RANGE' ? '↔️' : r.regime === 'LOW_VOL_COMPRESSION' ? '🔇' : '💥';
+          const score = r.topScore !== null ? ` score=${r.topScore}` : ' no setup';
+          return `${regime} **${r.asset.split('/')[0]}**${score}`;
+        }).join('  ');
+        lastScanLines = [
+          `**${ageMin}m ago** — ${scan.rawSignals} raw → ${scan.rankedSignals} passed threshold → ${scan.postedSignals} posted`,
+          assetLine,
+        ].join('\n');
+      }
+    }
+  } catch (err) {
+    errors.push(`lastScanSummary: ${String(err)}`);
+  }
+
+  // 6. Regime cache — in-memory read
   let regimeLines = '_No data yet — waiting for first scan_';
   try {
     const regimes = getLastRegimes();
@@ -58,7 +83,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     regimeLines = '_Error loading regime data_';
   }
 
-  // 5. Strategy weights — guard against undefined/null
+  // 7. Strategy weights — guard against undefined/null
   let stratWeights = 'Default (100%)';
   try {
     const entries = Object.entries(state.strategyWeights ?? {});
@@ -71,7 +96,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     errors.push(`strategyWeights: ${String(err)}`);
   }
 
-  // 6. Active position summary
+  // 8. Active position summary
   let positionSummary = 'None';
   if (active.length > 0) {
     positionSummary = active
@@ -88,6 +113,11 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     .setColor(state.enabled ? 0x00ff87 : 0xff4444)
     .setTitle(`🤖 Bot Status — ${state.enabled ? '🟢 Active' : '🔴 Disabled'}`)
     .addFields(
+      {
+        name: '🔍 Last Scan',
+        value: lastScanLines,
+        inline: false,
+      },
       {
         name: '📡 Market Regimes',
         value: regimeLines,
@@ -116,7 +146,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       {
         name: '⚙️ Settings',
         value: [
-          `Min score: **${config.trading.minScoreThreshold}**`,
+          `Min score: **${getMinScoreThreshold()}**`,
           `Max positions: **${config.trading.maxOpenPositions}**`,
           `Lev caps: scalp **${config.trading.maxLeverageScalp}x** | swing **${config.trading.maxLeverageSwing}x**`,
           `Scan: every **${config.engine.scanIntervalMinutes} min**`,

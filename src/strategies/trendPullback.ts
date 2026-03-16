@@ -61,9 +61,12 @@ export class TrendPullbackStrategy extends BaseStrategy {
 
     const priceNearEma = Math.abs(lastClose15 - lastEma20_15) / lastEma20_15 < 0.005; // within 0.5%
 
+    // RSI ranges are mirrored around 50 so LONG and SHORT conditions are equally selective.
+    // LONG:  38–58  (pulled back from overbought, not yet oversold)
+    // SHORT: 42–62  (bounced from oversold, not yet overbought) — mirror of LONG around 50
     const rsiPulledBack = isLong
       ? lastRsi15 >= 38 && lastRsi15 <= 58
-      : lastRsi15 >= 42 && lastRsi15 <= 65;
+      : lastRsi15 >= 42 && lastRsi15 <= 62;
 
     if (!rsiPulledBack || !priceNearEma) return null;
 

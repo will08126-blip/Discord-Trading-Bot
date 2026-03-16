@@ -55,6 +55,21 @@ const strategies = [
   new VolatilityExpansionStrategy(),
 ];
 
+// ─── Last scan summary (read by /status) ─────────────────────────────────────
+
+export interface LastScanSummary {
+  timestamp: number;
+  assetResults: { asset: string; regime: string; topScore: number | null; topStrategy: string | null }[];
+  rawSignals: number;
+  rankedSignals: number;
+  postedSignals: number;
+  skipped: boolean;
+  skipReason?: string;
+}
+
+let _lastScanSummary: LastScanSummary | null = null;
+export function getLastScanSummary(): LastScanSummary | null { return _lastScanSummary; }
+
 // ─── Single-asset scan (used by /check, /watchlist, /live) ───────────────────
 
 export interface SingleAssetScanResult {
@@ -285,6 +300,7 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
   const guard = checkHardControls();
   if (!guard.allowed) {
     logger.info(`Scan skipped: ${guard.reason}`);
+    _lastScanSummary = { timestamp: Date.now(), assetResults: [], rawSignals: 0, rankedSignals: 0, postedSignals: 0, skipped: true, skipReason: guard.reason };
     return { signalCount: 0, skipped: true, reason: guard.reason };
   }
 
@@ -304,6 +320,7 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
     }
 
     const newSignals: any[] = [];
+    const assetResults: LastScanSummary['assetResults'] = [];
 
     for (const mtfData of allData) {
       const asset = mtfData.asset;
@@ -312,10 +329,14 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
 
       if (!isTradeableRegime(regime.regime)) {
         logger.info(`${asset}: ${regime.regime} — skipping`);
+        assetResults.push({ asset, regime: regime.regime, topScore: null, topStrategy: null });
         continue;
       }
 
       logger.info(`${asset}: ${regime.regime} (ADX=${regime.adx.toFixed(1)}, ATRx=${regime.atrRatio.toFixed(2)})`);
+
+      let assetTopScore: number | null = null;
+      let assetTopStrategy: string | null = null;
 
       // Run each strategy
       for (const strategy of strategies) {
@@ -349,10 +370,15 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
 
           logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} ✓ queued`);
           newSignals.push(signal);
+          if (assetTopScore === null || signal.score > assetTopScore) {
+            assetTopScore = signal.score;
+            assetTopStrategy = strategy.name;
+          }
         } catch (err) {
           logger.error(`Strategy ${strategy.name} error for ${asset}:`, err);
         }
       }
+      assetResults.push({ asset, regime: regime.regime, topScore: assetTopScore, topStrategy: assetTopStrategy });
     }
 
     // Filter, rank, de-duplicate across strategies
@@ -361,6 +387,14 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
     const deduped = deduplicateSignals(ranked);
 
     logger.info(`Scan complete: ${newSignals.length} raw → ${ranked.length} ranked → ${deduped.length} posted`);
+    _lastScanSummary = {
+      timestamp: Date.now(),
+      assetResults,
+      rawSignals: newSignals.length,
+      rankedSignals: ranked.length,
+      postedSignals: deduped.length,
+      skipped: false,
+    };
 
     let postedCount = 0;
     for (const signal of deduped) {
