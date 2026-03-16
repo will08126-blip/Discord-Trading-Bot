@@ -123,6 +123,7 @@ export interface BotState {
   dailyLoss: number;
   dailyLossDate: string;         // YYYY-MM-DD
   strategyWeights: Record<string, number>; // 0.5–1.0
+  minScoreThreshold?: number;    // runtime override; falls back to config default (60) if unset
 }
 
 export interface RegimeResult {

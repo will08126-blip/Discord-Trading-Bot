@@ -16,6 +16,7 @@ import * as checkCmd from './check';
 import * as watchlistCmd from './watchlist';
 import * as liveCmd from './live';
 import * as tradeStatusCmd from './tradeStatus';
+import * as filterCmd from './filter';
 
 export interface Command {
   data: { toJSON: () => unknown; name: string };
@@ -29,6 +30,7 @@ const positionAliasCmd: Command = {
 };
 
 export const commands = new Map<string, Command>([
+  ['filter', filterCmd],
   ['status', statusCmd],
   ['positions', positionsCmd],
   ['position',  positionAliasCmd],  // singular alias so both /position and /positions work

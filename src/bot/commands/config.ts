@@ -1,11 +1,18 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { config } from '../../config';
+import { getMinScoreThreshold } from '../../adaptation/adaptation';
 
 export const data = new SlashCommandBuilder()
   .setName('config')
   .setDescription('Show current bot configuration settings');
 
 export async function execute(interaction: ChatInputCommandInteraction) {
+  const activeThreshold = getMinScoreThreshold();
+  const filterMode =
+    activeThreshold >= 75 ? '🔒 Strict (ELITE only)'
+    : activeThreshold >= 60 ? '⚖️ Normal (STRONG + ELITE)'
+    : '🔓 Relaxed (MEDIUM + STRONG + ELITE)';
+
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle('⚙️ Bot Configuration')
@@ -19,7 +26,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         name: '🔁 Scan Engine',
         value: [
           `Scan interval: **${config.engine.scanIntervalMinutes} min**`,
-          `Min score threshold: **${config.trading.minScoreThreshold}**`,
+          `Signal filter: **${filterMode}**  (score ≥ ${activeThreshold})  — change with \`/filter\``,
         ].join('\n'),
         inline: false,
       },

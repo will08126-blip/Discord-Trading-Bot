@@ -135,3 +135,18 @@ export function getStrategyWeight(strategyName: string): number {
   const state = loadState();
   return state.strategyWeights[strategyName] ?? 1.0;
 }
+
+/** Get the active minimum score threshold (runtime override or config default). */
+export function getMinScoreThreshold(): number {
+  const state = loadState();
+  return state.minScoreThreshold ?? config.trading.minScoreThreshold;
+}
+
+/** Persist a new minimum score threshold that survives restarts. */
+export function setMinScoreThreshold(threshold: number): BotState {
+  const state = loadState();
+  state.minScoreThreshold = threshold;
+  saveState(state);
+  logger.info(`Signal filter threshold set to ${threshold}`);
+  return state;
+}
