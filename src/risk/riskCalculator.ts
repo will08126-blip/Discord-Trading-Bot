@@ -17,13 +17,15 @@ export interface RiskParameters {
  * Confidence-based risk percentages — no fixed capital required.
  * User scales these to whatever they're working with that week.
  *
- * Scalp trades get slightly higher allocation because the leverage
- * is higher and stops are tighter, so the % risk stays manageable.
+ * Increased to reflect high-conviction, high-leverage trading style where
+ * tight stops (0.3-0.5% for HYBRID) are intentional entry precision rather
+ * than wide risk management. Combined with the tight stops this produces
+ * leverage suggestions in the 10-40× range for ELITE/STRONG setups.
  */
 const RISK_PCT: Record<string, Record<ScoreTier, number>> = {
-  scalp:  { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
-  hybrid: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
-  swing:  { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
+  scalp:  { ELITE: 5.0, STRONG: 3.0, MEDIUM: 1.5, NO_TRADE: 0 },
+  hybrid: { ELITE: 5.0, STRONG: 3.0, MEDIUM: 1.5, NO_TRADE: 0 },
+  swing:  { ELITE: 3.0, STRONG: 2.0, MEDIUM: 1.0, NO_TRADE: 0 },
 };
 
 function leverageCap(tier: ScoreTier, tradeType: TradeType): number {

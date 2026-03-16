@@ -226,19 +226,32 @@ export function updateDynamicSLTP(
   if (isLong && currentPrice > position.highestPrice) position.highestPrice = currentPrice;
   if (!isLong && currentPrice < position.lowestPrice) position.lowestPrice = currentPrice;
 
-  // ── TP extension ──────────────────────────────────────────────────────
-  // If price has moved > 1.5× the original reference distance in our favour, extend TP
+  // ── TP extension: milestone-based, capped ────────────────────────────
+  // Extend TP once for each whole R-multiple milestone achieved (2R, 3R, 4R...),
+  // using 1× ATR per milestone. Max 5 total (shared with momentum extensions via
+  // tpExtensionCount). This prevents the old unbounded per-scan creep that caused
+  // TPs to drift to unrealistic levels over long-held positions.
   const originalStopDist = Math.abs(position.entryPrice - position.signal.stopLoss);
   const priceMoved = isLong
     ? currentPrice - position.entryPrice
     : position.entryPrice - currentPrice;
 
   let newTP = oldTP;
-  if (originalStopDist > 0 && priceMoved > originalStopDist * 1.5) {
-    const extension = originalStopDist * 0.5;
+  const rAchieved = originalStopDist > 0 ? priceMoved / originalStopDist : 0;
+  // Only fire at whole-R milestones starting at 2R; cap at 5 total extensions
+  const newMilestone = Math.min(Math.floor(rAchieved), 5);
+  const MAX_AUTO_EXTENSIONS = 5;
+  if (
+    newMilestone >= 2 &&
+    newMilestone > position.tpExtensionCount &&
+    position.tpExtensionCount < MAX_AUTO_EXTENSIONS
+  ) {
+    // 1× ATR per milestone so extension scales with current volatility
+    const extension = currentAtr;
     const extended = isLong ? oldTP + extension : oldTP - extension;
     if (isLong && extended > newTP) newTP = extended;
     if (!isLong && extended < newTP) newTP = extended;
+    position.tpExtensionCount = newMilestone;
   }
 
   // Commit changes
@@ -321,14 +334,14 @@ export function evaluateMomentumForExtension(
  * Returns { oldTP, newTP } on success, null if extension was skipped
  * (limit reached, momentum weak, or ATR unavailable).
  *
- * Hard cap: 2 momentum extensions per position.
+ * Hard cap: 5 total extensions per position (shared with milestone auto-extensions).
  */
 export function attemptMomentumTPExtension(
   position: ActivePosition,
   candles: OHLCV[],
   currentPrice: number
 ): { oldTP: number; newTP: number } | null {
-  if (position.tpExtensionCount >= 2) return null;
+  if (position.tpExtensionCount >= 5) return null;
 
   const atrVals = atr(candles, 14);
   const currentAtr = atrVals[atrVals.length - 1];
@@ -345,7 +358,7 @@ export function attemptMomentumTPExtension(
   position.lastSLTPUpdateAt = Date.now();
 
   logger.info(
-    `TP extended by momentum (${position.tpExtensionCount}/2): ` +
+    `TP extended by momentum (${position.tpExtensionCount}/5): ` +
     `${position.signal.asset} ${position.signal.direction} ` +
     `TP ${oldTP.toFixed(4)} → ${newTP.toFixed(4)} (ATR=${currentAtr.toFixed(4)})`
   );

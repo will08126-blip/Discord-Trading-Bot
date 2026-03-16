@@ -12,6 +12,9 @@ import {
 } from '../indicators/indicators';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
+// Number of 4H ATR lengths projected forward for the macro TP target.
+const TP_ATR4H_MULTIPLIER = 10;
+
 /**
  * Volatility Expansion Strategy
  *
@@ -96,10 +99,13 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
       : upperBand15m + lastAtr15m * 0.5;
 
     const stopDistance = Math.abs(entryMid - stopLoss);
-    // TP: 3.5:1 R:R — expansion moves carry the most momentum and run furthest
-    const takeProfit = isLong
-      ? entryMid + stopDistance * 3.5
-      : entryMid - stopDistance * 3.5;
+    // TP: macro target using 4H ATR — volatility expansions project to key chart levels.
+    // Falls back to 3.5:1 R:R if 4H ATR unavailable.
+    const atrVals4h = atr(candles4h, 14);
+    const lastAtr4h = atrVals4h[n4h];
+    const takeProfit = (lastAtr4h && !isNaN(lastAtr4h))
+      ? (isLong ? entryMid + lastAtr4h * TP_ATR4H_MULTIPLIER : entryMid - lastAtr4h * TP_ATR4H_MULTIPLIER)
+      : (isLong ? entryMid + stopDistance * 3.5 : entryMid - stopDistance * 3.5);
 
     const entryZone: [number, number] = [
       entryMid - lastAtr5m * 0.15,
