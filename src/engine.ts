@@ -36,22 +36,17 @@ import { config } from './config';
 import { logger } from './utils/logger';
 import type { Asset, MultiTimeframeData, RegimeResult, StrategySignal } from './types';
 
-// Minimum price move (fraction) before posting a health update for an active position.
-// 0.005 = 0.5% — at 35x leverage this is already a 17.5% capital swing, enough to warrant an update.
-const HEALTH_UPDATE_THRESHOLD = 0.005;
-// Minimum time between health updates for the same position (ms) — prevents spam on volatile candles.
-// Matches the scan interval so no update is ever delayed more than one cycle.
-const HEALTH_UPDATE_MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-
 // Capital-return milestones that trigger profit alerts (fraction of capital).
 // Each milestone fires once and independently — positions get 1–4 profit pings through a big move.
 const PROFIT_MILESTONES = [0.25, 0.75, 1.50, 3.00]; // 25%, 75%, 150%, 300%
 
-// SL proximity: warn when price is within this multiple of the stop distance from the SL level.
-// 1.5× means: if stop is $0.35, warn when price is within $0.53 of the SL.
-const SL_PROXIMITY_MULTIPLIER = 1.5;
-// Minimum cooldown between SL proximity alerts for the same position (ms).
-const SL_PROXIMITY_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
+// Position health checks fire on two independent triggers:
+//   TIME:  at least every 15 minutes regardless of price action
+//   PRICE: whenever spot moves ≥1% from the last update price
+// A 5-minute minimum gap between updates prevents spam on fast-moving candles.
+const HEALTH_PRICE_TRIGGER_PCT = 0.01;          // 1% spot move
+const HEALTH_TIME_TRIGGER_MS  = 15 * 60 * 1000; // 15-minute periodic check
+const HEALTH_MIN_GAP_MS       =  5 * 60 * 1000; // spam guard
 
 const strategies = [
   new TrendPullbackStrategy(),
@@ -158,38 +153,19 @@ async function monitorActivePositions() {
         }
       }
 
-      // ── SL proximity alert ────────────────────────────────────────────
-      // Warn when price is within SL_PROXIMITY_MULTIPLIER × stopDist of the SL level.
-      // Helps the user decide whether to cut early before the stop is hit.
-      const stopDist = Math.abs(position.entryPrice - position.signal.stopLoss);
-      const distanceToSL = isLong
-        ? currentPrice - position.currentStopLoss
-        : position.currentStopLoss - currentPrice;
-      const timeSinceSLAlert = Date.now() - (position.slProximityAlertAt ?? 0);
-      if (
-        distanceToSL > 0 &&
-        distanceToSL < stopDist * SL_PROXIMITY_MULTIPLIER &&
-        timeSinceSLAlert > SL_PROXIMITY_COOLDOWN_MS
-      ) {
-        position.slProximityAlertAt = Date.now();
-        const slChannel = await discordClient.channels.fetch(position.channelId);
-        if (slChannel?.isTextBased()) {
-          await (slChannel as TextChannel).send(
-            buildExitAlertEmbed(position, 'SL_APPROACH', currentPrice)
-          );
-        }
-      }
-
-      // ── Position health update on significant price moves ──────────────────
-      // When price moves ≥1.5% from the last update price, post a health check
-      // embed telling the user if the trade still looks valid. Minimum 10-minute
-      // gap between updates to avoid spamming during volatile candles.
+      // ── Position health check ─────────────────────────────────────────────
+      // Fires when: (a) 15 min have passed since last check (periodic), OR
+      //             (b) price has moved ≥1% since the last update (price-triggered).
+      // A 5-minute minimum gap prevents spam on fast-moving candles.
       const refPrice = position.lastHealthUpdatePrice ?? position.entryPrice;
       const priceMoveSinceUpdate = Math.abs(currentPrice - refPrice) / refPrice;
       const timeSinceUpdate = Date.now() - (position.lastHealthUpdateAt ?? 0);
 
-      if (priceMoveSinceUpdate >= HEALTH_UPDATE_THRESHOLD
-          && timeSinceUpdate >= HEALTH_UPDATE_MIN_INTERVAL_MS) {
+      const timeTriggered  = timeSinceUpdate >= HEALTH_TIME_TRIGGER_MS;
+      const priceTriggered = priceMoveSinceUpdate >= HEALTH_PRICE_TRIGGER_PCT
+                             && timeSinceUpdate >= HEALTH_MIN_GAP_MS;
+
+      if (timeTriggered || priceTriggered) {
         try {
           const rsiVals = rsi(candles5m, 14);
           const emaVals = ema(candles5m, 9);
@@ -202,7 +178,8 @@ async function monitorActivePositions() {
           const healthChannel = await discordClient.channels.fetch(position.channelId);
           if (healthChannel?.isTextBased()) {
             await (healthChannel as TextChannel).send(
-              buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma)
+              buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma,
+                timeTriggered && !priceTriggered ? 'TIME' : 'PRICE')
             );
           }
         } catch (healthErr) {

@@ -375,7 +375,8 @@ export function buildPositionHealthEmbed(
   position: ActivePosition,
   currentPrice: number,
   rsi14: number,    // current RSI(14) value on 5m candles
-  ema9: number      // current EMA(9) value on 5m candles
+  ema9: number,     // current EMA(9) value on 5m candles
+  trigger: 'TIME' | 'PRICE' = 'PRICE'
 ) {
   const asset = position.signal.asset.split('/')[0];
   const isLong = position.signal.direction === 'LONG';
@@ -418,9 +419,11 @@ export function buildPositionHealthEmbed(
   const pnlSign = pnlPct >= 0 ? '+' : '';
   const capitalSign = capitalReturn >= 0 ? '+' : '';
 
+  const triggerLabel = trigger === 'TIME' ? '⏰ 15-min check' : '📊 Price moved 1%+';
+
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle(`📡 ${asset} ${position.signal.direction} — Trade Health Check`)
+    .setTitle(`${triggerLabel} — ${asset} ${position.signal.direction} Trade Health`)
     .setDescription(verdict)
     .addFields(
       {

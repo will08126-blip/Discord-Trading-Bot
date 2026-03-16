@@ -11,8 +11,6 @@ import {
 } from '../indicators/indicators';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType, OHLCV } from '../types';
 
-// Number of 4H ATR lengths projected forward for the macro TP target.
-const TP_ATR4H_MULTIPLIER = 12;
 
 /**
  * Breakout Retest Strategy (improved)
@@ -146,11 +144,11 @@ export class BreakoutRetestStrategy extends BaseStrategy {
 
       if (stopDistance === 0) continue; // degenerate case
 
-      // TP: macro target using 4H ATR — projects to the next major chart level.
-      // Falls back to 3:1 R:R if 4H ATR unavailable.
-      const takeProfit = (lastAtr4h && !isNaN(lastAtr4h))
-        ? (isLong ? entryMid + lastAtr4h * TP_ATR4H_MULTIPLIER : entryMid - lastAtr4h * TP_ATR4H_MULTIPLIER)
-        : (isLong ? entryMid + stopDistance * 3.0 : entryMid - stopDistance * 3.0);
+      // TP: trade-type-aware R:R target (classify first so multiplier matches holding horizon).
+      const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
+      const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+      const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
+      const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
 
       const entryLow = isLong ? level - lastAtr5m * 0.1 : entryMid - lastAtr5m * 0.2;
       const entryHigh = isLong ? entryMid + lastAtr5m * 0.1 : level + lastAtr5m * 0.1;
@@ -210,9 +208,6 @@ export class BreakoutRetestStrategy extends BaseStrategy {
         score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
 
       if (tier === 'NO_TRADE') continue;
-
-      const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-      const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
 
       // Asia session gate: avoid tight stops in low-liquidity hours
       if (tradeType === 'SCALP' && sessionQualityScore() <= 2) continue;
