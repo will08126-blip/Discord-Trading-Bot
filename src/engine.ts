@@ -21,7 +21,7 @@ import {
   handleSLTPHit,
   attemptMomentumTPExtension,
 } from './signals/signalManager';
-import { checkHardControls, getStrategyWeight } from './adaptation/adaptation';
+import { checkHardControls, getStrategyWeight, getMinScoreThreshold } from './adaptation/adaptation';
 import {
   buildSignalEmbed,
   buildTPUpdateEmbed,
@@ -335,7 +335,8 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
     }
 
     // Filter, rank, de-duplicate across strategies
-    const ranked = filterAndRankSignals(newSignals, config.trading.minScoreThreshold);
+    // Uses the runtime threshold (set via /filter) or falls back to config default.
+    const ranked = filterAndRankSignals(newSignals, getMinScoreThreshold());
     const deduped = deduplicateSignals(ranked);
 
     logger.info(`Scan complete: ${newSignals.length} raw → ${ranked.length} ranked → ${deduped.length} posted`);
