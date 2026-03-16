@@ -1,14 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import { BaseStrategy } from './base';
 import {
-  atr,
-  atrAverage,
   isVolumeSpike,
   swingPoints,
   sessionQualityScore,
-  ema,
-  rsi,
 } from '../indicators/indicators';
+import { cachedAtr, cachedAtrAverage, cachedRsi, cachedEma } from '../indicators/cache';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType, OHLCV } from '../types';
 
 
@@ -40,16 +37,13 @@ export class BreakoutRetestStrategy extends BaseStrategy {
 
     if (candles4h.length < 14 || candles15m.length < 50 || candles5m.length < 20) return null;
 
-    const atrVals4h = atr(candles4h, 14);
-    const lastAtr4h = atrVals4h[candles4h.length - 1];
+    const lastAtr4h = cachedAtr(candles4h, 14)[candles4h.length - 1];
 
-    const atrVals15m = atr(candles15m, 14);
-    const avgAtr15m = atrAverage(atrVals15m, 14);
-    const lastAtr15m = atrVals15m[candles15m.length - 1];
+    const lastAtr15m = cachedAtr(candles15m, 14)[candles15m.length - 1];
+    const avgAtr15m  = cachedAtrAverage(candles15m, 14);
 
-    const atrVals5m = atr(candles5m, 14);
-    const lastAtr5m = atrVals5m[candles5m.length - 1];
-    const avgAtr5m = atrAverage(atrVals5m, 14);
+    const lastAtr5m = cachedAtr(candles5m, 14)[candles5m.length - 1];
+    const avgAtr5m  = cachedAtrAverage(candles5m, 14);
 
     // ── Identify key levels from 15m swing points ─────────────────────────
     const swings = swingPoints(candles15m.slice(-50), 3, 3, 20);
@@ -83,7 +77,7 @@ export class BreakoutRetestStrategy extends BaseStrategy {
     const lastClose5m = candles5m[candles5m.length - 1].close;
 
     // Pre-compute RSI and volume average on 5m for retest confirmation
-    const rsiVals5m = rsi(candles5m, 14);
+    const rsiVals5m = cachedRsi(candles5m, 14);
     const currentRsi5m = rsiVals5m[rsiVals5m.length - 1] ?? 50;
     const avgVol5m = candles5m.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
 
@@ -96,8 +90,11 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       const isShortBreak = breakCandle.close < level;
 
       // ── Step 2: Price is currently retesting the level on 5m ──────────────
-      // Tightened to 0.2% (was 0.3%) to reduce false retests
-      const tolerance = level * 0.002;
+      // Tolerance adapts to current volatility: at least 0.1% of price OR
+      // half an ATR, whichever is larger. In VOL_EXPANSION, ATR is wide so
+      // tolerance widens (prevents missing valid retests). In compression,
+      // the 0.1% floor keeps it tight.
+      const tolerance = Math.max(level * 0.001, avgAtr5m * 0.5);
       const isRetesting = Math.abs(lastClose5m - level) <= tolerance;
       if (!isRetesting) continue;
 
@@ -157,8 +154,8 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       const components = this.zeroComponents();
 
       // HTF alignment: EMA direction on 15m
-      const ema20 = ema(candles15m, 20);
-      const ema50 = ema(candles15m, 50);
+      const ema20 = cachedEma(candles15m, 20);
+      const ema50 = cachedEma(candles15m, 50);
       const n = candles15m.length - 1;
       const htfAligned =
         (isLong && ema20[n] > ema50[n]) || (!isLong && ema20[n] < ema50[n]);

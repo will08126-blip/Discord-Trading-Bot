@@ -4,7 +4,7 @@ import type { StrategySignal, ActivePosition, ClosedTrade, ExitReason, OHLCV } f
 import { calculateRisk } from '../risk/riskCalculator';
 import { addTrade } from '../performance/tracker';
 import { onTradeClosed } from '../adaptation/adaptation';
-import { atr, ema, rsi } from '../indicators/indicators';
+import { cachedAtr, cachedEma, cachedRsi } from '../indicators/cache';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 
@@ -212,11 +212,12 @@ export interface SLTPUpdate {
 export function updateDynamicSLTP(
   position: ActivePosition,
   candles5m: OHLCV[],
-  currentPrice: number
+  currentPrice: number,
+  allowExtension = true
 ): SLTPUpdate | null {
   const isLong = position.signal.direction === 'LONG';
 
-  const atrVals = atr(candles5m, 14);
+  const atrVals = cachedAtr(candles5m, 14);
   const currentAtr = atrVals[atrVals.length - 1];
   if (!currentAtr || isNaN(currentAtr)) return null;
 
@@ -242,6 +243,7 @@ export function updateDynamicSLTP(
   const newMilestone = Math.min(Math.floor(rAchieved), 5);
   const MAX_AUTO_EXTENSIONS = 5;
   if (
+    allowExtension &&
     newMilestone >= 2 &&
     newMilestone > position.tpExtensionCount &&
     position.tpExtensionCount < MAX_AUTO_EXTENSIONS
@@ -307,13 +309,13 @@ export function evaluateMomentumForExtension(
   const isLong = direction === 'LONG';
 
   // 1. EMA(9): is price still on the right side?
-  const emaVals = ema(candles, 9);
+  const emaVals = cachedEma(candles, 9);
   const currentEma = emaVals[emaVals.length - 1];
   const currentClose = candles[candles.length - 1].close;
   const emaPass = !isNaN(currentEma) && (isLong ? currentClose > currentEma : currentClose < currentEma);
 
   // 2. RSI(14): not overbought/oversold at the extreme
-  const rsiVals = rsi(candles, 14);
+  const rsiVals = cachedRsi(candles, 14);
   const currentRsi = rsiVals[rsiVals.length - 1];
   const rsiPass = !isNaN(currentRsi) && (isLong ? currentRsi < 80 : currentRsi > 20);
 
@@ -343,7 +345,7 @@ export function attemptMomentumTPExtension(
 ): { oldTP: number; newTP: number } | null {
   if (position.tpExtensionCount >= 5) return null;
 
-  const atrVals = atr(candles, 14);
+  const atrVals = cachedAtr(candles, 14);
   const currentAtr = atrVals[atrVals.length - 1];
   if (!currentAtr || isNaN(currentAtr)) return null;
 

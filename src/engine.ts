@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import type { TextChannel } from 'discord.js';
 import { discordClient } from './bot/client';
 import { fetchAllAssets, fetchOHLCV, fetchCurrentPrice } from './data/marketData';
-import { detectRegime, isTradeableRegime, setLastRegime } from './regime/regimeDetector';
+import { detectRegime, isTradeableRegime, setLastRegime, getLastRegimes } from './regime/regimeDetector';
 import { TrendPullbackStrategy } from './strategies/trendPullback';
 import { BreakoutRetestStrategy } from './strategies/breakoutRetest';
 import { LiquiditySweepStrategy } from './strategies/liquiditySweep';
@@ -31,7 +31,7 @@ import {
   buildPositionHealthEmbed,
 } from './bot/embeds';
 import { generateDailySummary } from './llm/summaries';
-import { rsi, ema } from './indicators/indicators';
+import { cachedRsi, cachedEma } from './indicators/cache';
 import { config } from './config';
 import { logger } from './utils/logger';
 import type { Asset, MultiTimeframeData, RegimeResult, StrategySignal } from './types';
@@ -67,18 +67,16 @@ export interface SingleAssetScanResult {
 export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanResult> {
   try {
     const asset = symbol as Asset;
-    const [candles4h, candles15m, candles5m, candles1m] = await Promise.all([
+    const [candles4h, candles15m, candles5m] = await Promise.all([
       fetchOHLCV(asset, '4h', 200),
       fetchOHLCV(asset, '15m', 200),
       fetchOHLCV(asset, '5m', 200),
-      fetchOHLCV(asset, '1m', 200),
     ]);
     const mtfData: MultiTimeframeData = {
       asset,
       '4h': candles4h,
       '15m': candles15m,
       '5m': candles5m,
-      '1m': candles1m,
     };
     const regime = detectRegime(asset, candles4h);
     setLastRegime(asset, regime);
@@ -136,23 +134,33 @@ async function monitorActivePositions() {
       ]);
 
       // ── Profit milestone alerts ───────────────────────────────────────
-      // Fire at each milestone (25%, 75%, 150%, 300% capital return), independently.
-      // Much better than the old single-fire flag — positions get up to 4 profit pings.
+      // ALL exceeded milestones fire in a single cycle — no one-per-cycle drip.
+      // firedMilestones is a Set stored as an array for JSON serialisation.
+      // Falls back to legacy lastProfitMilestonePct for positions saved before this update.
       const isLong = position.signal.direction === 'LONG';
       const priceMoved = isLong
         ? (currentPrice - position.entryPrice) / position.entryPrice
         : (position.entryPrice - currentPrice) / position.entryPrice;
       const capitalReturn = priceMoved * position.suggestedLeverage;
-      const lastMilestone = position.lastProfitMilestonePct ?? -1;
-      const hitMilestone = PROFIT_MILESTONES.find(m => m > lastMilestone && capitalReturn >= m);
-      if (hitMilestone !== undefined) {
-        position.lastProfitMilestonePct = hitMilestone;
-        const profitChannel = await discordClient.channels.fetch(position.channelId);
-        if (profitChannel?.isTextBased()) {
-          await (profitChannel as TextChannel).send(
-            buildEarlyProfitAlertEmbed(position, currentPrice, capitalReturn, hitMilestone)
-          );
+
+      const alreadyFired = new Set<number>(
+        position.firedMilestones ??
+        (position.lastProfitMilestonePct !== undefined
+          ? PROFIT_MILESTONES.filter(m => m <= (position.lastProfitMilestonePct as number))
+          : [])
+      );
+      const toFire = PROFIT_MILESTONES.filter(m => !alreadyFired.has(m) && capitalReturn >= m);
+      if (toFire.length > 0) {
+        for (const milestone of toFire) {
+          alreadyFired.add(milestone);
+          const profitChannel = await discordClient.channels.fetch(position.channelId);
+          if (profitChannel?.isTextBased()) {
+            await (profitChannel as TextChannel).send(
+              buildEarlyProfitAlertEmbed(position, currentPrice, capitalReturn, milestone)
+            );
+          }
         }
+        position.firedMilestones = [...alreadyFired].sort((a, b) => a - b);
       }
 
       // ── Position health check ─────────────────────────────────────────────
@@ -169,8 +177,8 @@ async function monitorActivePositions() {
 
       if (timeTriggered || priceTriggered) {
         try {
-          const rsiVals = rsi(candles5m, 14);
-          const emaVals = ema(candles5m, 9);
+          const rsiVals = cachedRsi(candles5m, 14);
+          const emaVals = cachedEma(candles5m, 9);
           const currentRsi = rsiVals[rsiVals.length - 1] ?? NaN;
           const currentEma = emaVals[emaVals.length - 1] ?? NaN;
 
@@ -189,7 +197,20 @@ async function monitorActivePositions() {
         }
       }
 
-      const update = updateDynamicSLTP(position, candles5m, currentPrice);
+      // ── Regime-flip gate ─────────────────────────────────────────────────
+      // If the 4H regime has changed since entry, TP extensions are paused.
+      // SL trailing still runs (capital protection), but we stop pushing TP
+      // further when the market structure that justified this trade is gone.
+      const cachedRegime = getLastRegimes().get(asset);
+      const regimeFlipped = cachedRegime !== undefined && cachedRegime.regime !== position.signal.regime;
+      if (regimeFlipped) {
+        logger.warn(
+          `${asset} regime flipped ${position.signal.regime} → ${cachedRegime!.regime} ` +
+          `— TP extensions paused for position ${position.id}`
+        );
+      }
+
+      const update = updateDynamicSLTP(position, candles5m, currentPrice, !regimeFlipped);
       if (!update) continue;
 
       const channel = await discordClient.channels.fetch(position.channelId);
@@ -219,9 +240,12 @@ async function monitorActivePositions() {
         );
       }
 
-      // ── TP proximity: try to extend before alerting ──────────────────────
+      // ── TP proximity: momentum check at 1% out (was 0.3%) ──────────────
+      // Firing at 1% gives the momentum evaluation meaningful lead time
+      // rather than checking only when price is already at the doorstep.
+      // Skipped entirely if the regime has flipped.
       const tpDist = Math.abs(currentPrice - update.newTP) / currentPrice;
-      if (tpDist < 0.003) {
+      if (tpDist < 0.010 && !regimeFlipped) {
         const extension = attemptMomentumTPExtension(position, candles5m, currentPrice);
         if (extension) {
           // Momentum is strong — push TP out and let it run
