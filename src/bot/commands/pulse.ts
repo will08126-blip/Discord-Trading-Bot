@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
 import { getAllActivePositions } from '../../signals/signalManager';
 import { fetchOHLCV, fetchCurrentPrice } from '../../data/marketData';
-import { rsi, ema } from '../../indicators/indicators';
+import { cachedRsi, cachedEma } from '../../indicators/cache';
 import { buildPositionHealthEmbed } from '../embeds';
 import type { Asset } from '../../types';
 
@@ -26,7 +26,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   await interaction.deferReply();
 
-  const results: string[] = [];
+  const errors: string[] = [];
+  let firstReplyDone = false;
 
   for (const position of positions) {
     try {
@@ -36,8 +37,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         fetchCurrentPrice(asset),
       ]);
 
-      const rsiVals = rsi(candles5m, 14);
-      const emaVals = ema(candles5m, 9);
+      const rsiVals = cachedRsi(candles5m, 14);
+      const emaVals = cachedEma(candles5m, 9);
       const currentRsi = rsiVals[rsiVals.length - 1] ?? NaN;
       const currentEma = emaVals[emaVals.length - 1] ?? NaN;
 
@@ -45,24 +46,27 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       position.lastHealthUpdatePrice = currentPrice;
       position.lastHealthUpdateAt = Date.now();
 
-      await interaction.followUp(
-        buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma, 'PRICE')
-      );
+      const payload = buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma, 'PRICE');
+
+      if (!firstReplyDone) {
+        // Replace the "Bot is thinking…" placeholder — keeps the message alive permanently
+        await interaction.editReply(payload);
+        firstReplyDone = true;
+      } else {
+        await interaction.followUp(payload);
+      }
     } catch (err) {
-      results.push(`⚠️ Failed to check ${position.signal.asset}: ${(err as Error).message}`);
+      errors.push(`⚠️ Failed to check ${position.signal.asset}: ${(err as Error).message}`);
     }
   }
 
-  // Surface any per-position errors as a single follow-up
-  if (results.length > 0) {
-    await interaction.followUp({ content: results.join('\n'), ephemeral: true });
-  }
-
-  // If deferReply was called but no followUp succeeded (all failed), send a fallback
-  if (positions.length > 0 && results.length === positions.length) {
-    await interaction.editReply('❌ All health checks failed — check bot logs.');
-  } else {
-    // Clean up the "Bot is thinking…" deferred reply placeholder
-    await interaction.deleteReply().catch(() => {/* ignore if already gone */});
+  if (errors.length > 0) {
+    const errPayload = { content: errors.join('\n'), ephemeral: true };
+    if (!firstReplyDone) {
+      await interaction.editReply(errors.join('\n'));
+    } else {
+      await interaction.followUp(errPayload);
+    }
   }
 }
+
