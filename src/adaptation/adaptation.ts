@@ -11,11 +11,35 @@ const STRATEGY_NAMES = [
   'Volatility Expansion',
 ];
 
+/**
+ * How far the adaptation system can reduce each strategy's weight.
+ * Reflects user preferences: Liquidity Sweep/Breakout/Trend are high priority;
+ * Volatility Expansion is a bonus signal (user didn't select it as a priority).
+ */
+const STRATEGY_WEIGHT_FLOOR: Record<string, number> = {
+  'Trend Pullback':       0.75,
+  'Breakout Retest':      0.75,
+  'Liquidity Sweep':      0.80,
+  'Volatility Expansion': 0.50,
+};
+
+/**
+ * Recommended starting weights — used on reset and as the DEFAULT_STATE.
+ * Trend Pullback / Breakout Retest / Liquidity Sweep are equal at 1.0 (all user-preferred).
+ * Volatility Expansion starts at 0.85 — valid signal but lower user priority.
+ */
+export const RECOMMENDED_WEIGHTS: Record<string, number> = {
+  'Trend Pullback':       1.0,
+  'Breakout Retest':      1.0,
+  'Liquidity Sweep':      1.0,
+  'Volatility Expansion': 0.85,
+};
+
 const DEFAULT_STATE: BotState = {
   enabled: config.engine.enabled,
   dailyLoss: 0,
   dailyLossDate: '',
-  strategyWeights: Object.fromEntries(STRATEGY_NAMES.map((n) => [n, 1.0])),
+  strategyWeights: { ...RECOMMENDED_WEIGHTS },
 };
 
 // ─── State persistence ────────────────────────────────────────────────────────
@@ -62,9 +86,10 @@ export function onTradeClosed(_trade: ClosedTrade): BotState {
   for (const name of STRATEGY_NAMES) {
     const wr = strategyWinRate(name, 10);
     if (wr < 0.40) {
-      // Underperforming — reduce weight gradually
+      // Underperforming — reduce weight gradually, but never below the user-preference floor
+      const floor = STRATEGY_WEIGHT_FLOOR[name] ?? 0.50;
       state.strategyWeights[name] = Math.max(
-        0.5,
+        floor,
         (state.strategyWeights[name] ?? 1.0) * 0.90
       );
       logger.info(
@@ -148,5 +173,33 @@ export function setMinScoreThreshold(threshold: number): BotState {
   state.minScoreThreshold = threshold;
   saveState(state);
   logger.info(`Signal filter threshold set to ${threshold}`);
+  return state;
+}
+
+/**
+ * Reset all strategy weights to the recommended starting point.
+ * Use this when historical weight data is stale or tainted (e.g. after changing TP logic).
+ */
+export function resetStrategyWeights(): BotState {
+  const state = loadState();
+  state.strategyWeights = { ...RECOMMENDED_WEIGHTS };
+  saveState(state);
+  logger.info('Strategy weights reset to recommended defaults');
+  return state;
+}
+
+/**
+ * Manually override a single strategy's weight (0.50–1.0).
+ * The adaptation system will continue adjusting from this new baseline.
+ */
+export function setStrategyWeight(strategyName: string, weight: number): BotState {
+  if (!STRATEGY_NAMES.includes(strategyName)) {
+    throw new Error(`Unknown strategy: ${strategyName}`);
+  }
+  const clamped = Math.max(0.50, Math.min(1.0, weight));
+  const state = loadState();
+  state.strategyWeights[strategyName] = clamped;
+  saveState(state);
+  logger.info(`Strategy "${strategyName}" weight manually set to ${clamped.toFixed(2)}`);
   return state;
 }

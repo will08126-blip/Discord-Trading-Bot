@@ -35,7 +35,6 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         value: [
           `Max open positions: **${config.trading.maxOpenPositions}**`,
           `Daily loss limit: **$${config.trading.maxDailyLoss}**`,
-          `Risk per trade: ELITE 2% | STRONG 1.5% | MEDIUM 1%`,
         ].join('\n'),
         inline: false,
       },
