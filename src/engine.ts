@@ -145,19 +145,25 @@ async function monitorActivePositions() {
 
       const alreadyFired = new Set<number>(
         position.firedMilestones ??
-        (position.lastProfitMilestonePct !== undefined
-          ? PROFIT_MILESTONES.filter(m => m <= (position.lastProfitMilestonePct as number))
-          : [])
+        (() => {
+          // Migrate legacy field — validate it's actually a number before using
+          const legacy = position.lastProfitMilestonePct;
+          return (typeof legacy === 'number' && isFinite(legacy))
+            ? PROFIT_MILESTONES.filter(m => m <= legacy)
+            : [];
+        })()
       );
       const toFire = PROFIT_MILESTONES.filter(m => !alreadyFired.has(m) && capitalReturn >= m);
       if (toFire.length > 0) {
         for (const milestone of toFire) {
           alreadyFired.add(milestone);
-          const profitChannel = await discordClient.channels.fetch(position.channelId);
+          const profitChannel = await discordClient.channels.fetch(position.channelId).catch(() => null);
           if (profitChannel?.isTextBased()) {
             await (profitChannel as TextChannel).send(
               buildEarlyProfitAlertEmbed(position, currentPrice, capitalReturn, milestone)
             );
+          } else {
+            logger.warn(`Milestone alert dropped — channel ${position.channelId} not found for position ${position.id}`);
           }
         }
         position.firedMilestones = [...alreadyFired].sort((a, b) => a - b);
@@ -182,15 +188,22 @@ async function monitorActivePositions() {
           const currentRsi = rsiVals[rsiVals.length - 1] ?? NaN;
           const currentEma = emaVals[emaVals.length - 1] ?? NaN;
 
-          position.lastHealthUpdatePrice = currentPrice;
-          position.lastHealthUpdateAt = Date.now();
+          // Skip health embed if indicators are both unavailable — embed would show misleading data
+          if (isNaN(currentRsi) && isNaN(currentEma)) {
+            logger.warn(`Health check skipped for ${asset} — insufficient candle data for indicators`);
+          } else {
+            position.lastHealthUpdatePrice = currentPrice;
+            position.lastHealthUpdateAt = Date.now();
 
-          const healthChannel = await discordClient.channels.fetch(position.channelId);
-          if (healthChannel?.isTextBased()) {
-            await (healthChannel as TextChannel).send(
-              buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma,
-                timeTriggered && !priceTriggered ? 'TIME' : 'PRICE')
-            );
+            const healthChannel = await discordClient.channels.fetch(position.channelId).catch(() => null);
+            if (healthChannel?.isTextBased()) {
+              await (healthChannel as TextChannel).send(
+                buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma,
+                  timeTriggered && !priceTriggered ? 'TIME' : 'PRICE')
+              );
+            } else {
+              logger.warn(`Health update dropped — channel ${position.channelId} not found for position ${position.id}`);
+            }
           }
         } catch (healthErr) {
           logger.warn(`Health update failed for position ${position.id}:`, healthErr);
@@ -201,7 +214,12 @@ async function monitorActivePositions() {
       // If the 4H regime has changed since entry, TP extensions are paused.
       // SL trailing still runs (capital protection), but we stop pushing TP
       // further when the market structure that justified this trade is gone.
+      // If regime is unknown (first cycle after restart), allow extensions —
+      // the next scan cycle will populate the cache and the gate activates then.
       const cachedRegime = getLastRegimes().get(asset);
+      if (cachedRegime === undefined) {
+        logger.debug(`${asset} regime not yet cached — TP extension gate deferred until first scan`);
+      }
       const regimeFlipped = cachedRegime !== undefined && cachedRegime.regime !== position.signal.regime;
       if (regimeFlipped) {
         logger.warn(
