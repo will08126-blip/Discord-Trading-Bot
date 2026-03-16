@@ -1,35 +1,36 @@
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder } from 'discord.js';
 import type { StrategySignal, ActivePosition, ClosedTrade } from '../types';
 import type { SingleAssetScanResult } from '../engine';
 export declare function buildSignalEmbed(signal: StrategySignal): {
-    embeds: EmbedBuilder[];
-    components: ActionRowBuilder<ButtonBuilder>[];
+    embeds: any[];
+    components: any[];
 };
 export declare function buildPositionEmbed(position: ActivePosition, currentPrice?: number): {
-    embeds: EmbedBuilder[];
-    components: ActionRowBuilder<ButtonBuilder>[];
+    embeds: any[];
+    components: any[];
 };
-export declare function buildExitAlertEmbed(position: ActivePosition, type: 'TP_APPROACH' | 'TP_HIT', currentPrice: number, newTP?: number): {
-    embeds: EmbedBuilder[];
-    components: ActionRowBuilder<ButtonBuilder>[];
+export declare function buildExitAlertEmbed(position: ActivePosition, type: 'TP_APPROACH' | 'TP_HIT' | 'SL_APPROACH', currentPrice: number, newTP?: number): {
+    embeds: any[];
+    components: any[];
 };
 export declare function buildTPUpdateEmbed(position: ActivePosition, oldTP: number, newTP: number, currentPrice: number): {
-    embeds: EmbedBuilder[];
+    embeds: any[];
 };
-export declare function buildCheckSummaryEmbed(result: SingleAssetScanResult): EmbedBuilder;
+export declare function buildCheckSummaryEmbed(result: SingleAssetScanResult): any;
 export declare function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive?: boolean): {
-    embeds: EmbedBuilder[];
+    embeds: any[];
 };
-export declare function buildEarlyProfitAlertEmbed(position: ActivePosition, currentPrice: number, returnOnCapital: number): {
-    embeds: EmbedBuilder[];
-    components: ActionRowBuilder<ButtonBuilder>[];
+export declare function buildEarlyProfitAlertEmbed(position: ActivePosition, currentPrice: number, returnOnCapital: number, // fraction, e.g. 0.50 = 50%
+milestone: number): {
+    embeds: any[];
+    components: any[];
 };
 export declare function buildPositionHealthEmbed(position: ActivePosition, currentPrice: number, rsi14: number, // current RSI(14) value on 5m candles
-ema9: number): {
-    embeds: EmbedBuilder[];
-    components: ActionRowBuilder<ButtonBuilder>[];
+ema9: number, // current EMA(9) value on 5m candles
+trigger?: 'TIME' | 'PRICE'): {
+    embeds: any[];
+    components: any[];
 };
 export declare function buildClosedTradeEmbed(trade: ClosedTrade): {
-    embeds: EmbedBuilder[];
+    embeds: any[];
 };
 //# sourceMappingURL=embeds.d.ts.map

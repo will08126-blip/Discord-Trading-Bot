@@ -23,7 +23,7 @@ export interface MultiTimeframeData {
     '4h': OHLCV[];
     '15m': OHLCV[];
     '5m': OHLCV[];
-    '1m': OHLCV[];
+    '1m'?: OHLCV[];
 }
 export interface ScoreComponents {
     htfAlignment: number;
@@ -68,6 +68,10 @@ export interface ActivePosition {
     lastSLTPUpdateAt: number;
     tpExtensionCount: number;
     exitAlertSent: boolean;
+    firedMilestones?: number[];
+    /** @deprecated replaced by firedMilestones; kept for backward-compat with persisted positions */
+    lastProfitMilestonePct?: number;
+    slProximityAlertAt?: number;
     lastHealthUpdatePrice?: number;
     lastHealthUpdateAt?: number;
 }
@@ -105,6 +109,7 @@ export interface BotState {
     dailyLoss: number;
     dailyLossDate: string;
     strategyWeights: Record<string, number>;
+    minScoreThreshold?: number;
 }
 export interface RegimeResult {
     asset: Asset;

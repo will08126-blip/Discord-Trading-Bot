@@ -23,7 +23,7 @@ const path_1 = __importDefault(require("path"));
 const riskCalculator_1 = require("../risk/riskCalculator");
 const tracker_1 = require("../performance/tracker");
 const adaptation_1 = require("../adaptation/adaptation");
-const indicators_1 = require("../indicators/indicators");
+const cache_1 = require("../indicators/cache");
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
 // In-memory stores
@@ -164,9 +164,9 @@ function closePosition(positionId, exitPrice, reason) {
         `${reason} @ ${exitPrice} — P&L ${pnlPct >= 0 ? '+' : ''}${(pnlPct * 100).toFixed(2)}% ($${pnlDollar.toFixed(2)})`);
     return trade;
 }
-function updateDynamicSLTP(position, candles5m, currentPrice) {
+function updateDynamicSLTP(position, candles5m, currentPrice, allowExtension = true) {
     const isLong = position.signal.direction === 'LONG';
-    const atrVals = (0, indicators_1.atr)(candles5m, 14);
+    const atrVals = (0, cache_1.cachedAtr)(candles5m, 14);
     const currentAtr = atrVals[atrVals.length - 1];
     if (!currentAtr || isNaN(currentAtr))
         return null;
@@ -176,20 +176,32 @@ function updateDynamicSLTP(position, candles5m, currentPrice) {
         position.highestPrice = currentPrice;
     if (!isLong && currentPrice < position.lowestPrice)
         position.lowestPrice = currentPrice;
-    // ── TP extension ──────────────────────────────────────────────────────
-    // If price has moved > 1.5× the original reference distance in our favour, extend TP
+    // ── TP extension: milestone-based, capped ────────────────────────────
+    // Extend TP once for each whole R-multiple milestone achieved (2R, 3R, 4R...),
+    // using 1× ATR per milestone. Max 5 total (shared with momentum extensions via
+    // tpExtensionCount). This prevents the old unbounded per-scan creep that caused
+    // TPs to drift to unrealistic levels over long-held positions.
     const originalStopDist = Math.abs(position.entryPrice - position.signal.stopLoss);
     const priceMoved = isLong
         ? currentPrice - position.entryPrice
         : position.entryPrice - currentPrice;
     let newTP = oldTP;
-    if (originalStopDist > 0 && priceMoved > originalStopDist * 1.5) {
-        const extension = originalStopDist * 0.5;
+    const rAchieved = originalStopDist > 0 ? priceMoved / originalStopDist : 0;
+    // Only fire at whole-R milestones starting at 2R; cap at 5 total extensions
+    const newMilestone = Math.min(Math.floor(rAchieved), 5);
+    const MAX_AUTO_EXTENSIONS = 5;
+    if (allowExtension &&
+        newMilestone >= 2 &&
+        newMilestone > position.tpExtensionCount &&
+        position.tpExtensionCount < MAX_AUTO_EXTENSIONS) {
+        // 1× ATR per milestone so extension scales with current volatility
+        const extension = currentAtr;
         const extended = isLong ? oldTP + extension : oldTP - extension;
         if (isLong && extended > newTP)
             newTP = extended;
         if (!isLong && extended < newTP)
             newTP = extended;
+        position.tpExtensionCount = newMilestone;
     }
     // Commit changes
     position.currentTakeProfit = newTP;
@@ -235,12 +247,12 @@ function evaluateMomentumForExtension(candles, direction) {
         return false;
     const isLong = direction === 'LONG';
     // 1. EMA(9): is price still on the right side?
-    const emaVals = (0, indicators_1.ema)(candles, 9);
+    const emaVals = (0, cache_1.cachedEma)(candles, 9);
     const currentEma = emaVals[emaVals.length - 1];
     const currentClose = candles[candles.length - 1].close;
     const emaPass = !isNaN(currentEma) && (isLong ? currentClose > currentEma : currentClose < currentEma);
     // 2. RSI(14): not overbought/oversold at the extreme
-    const rsiVals = (0, indicators_1.rsi)(candles, 14);
+    const rsiVals = (0, cache_1.cachedRsi)(candles, 14);
     const currentRsi = rsiVals[rsiVals.length - 1];
     const rsiPass = !isNaN(currentRsi) && (isLong ? currentRsi < 80 : currentRsi > 20);
     // 3. Last 2 candles closed in the trade direction
@@ -258,12 +270,12 @@ function evaluateMomentumForExtension(candles, direction) {
  * Returns { oldTP, newTP } on success, null if extension was skipped
  * (limit reached, momentum weak, or ATR unavailable).
  *
- * Hard cap: 2 momentum extensions per position.
+ * Hard cap: 5 total extensions per position (shared with milestone auto-extensions).
  */
 function attemptMomentumTPExtension(position, candles, currentPrice) {
-    if (position.tpExtensionCount >= 2)
+    if (position.tpExtensionCount >= 5)
         return null;
-    const atrVals = (0, indicators_1.atr)(candles, 14);
+    const atrVals = (0, cache_1.cachedAtr)(candles, 14);
     const currentAtr = atrVals[atrVals.length - 1];
     if (!currentAtr || isNaN(currentAtr))
         return null;
@@ -275,7 +287,7 @@ function attemptMomentumTPExtension(position, candles, currentPrice) {
     position.currentTakeProfit = newTP;
     position.tpExtensionCount += 1;
     position.lastSLTPUpdateAt = Date.now();
-    logger_1.logger.info(`TP extended by momentum (${position.tpExtensionCount}/2): ` +
+    logger_1.logger.info(`TP extended by momentum (${position.tpExtensionCount}/5): ` +
         `${position.signal.asset} ${position.signal.direction} ` +
         `TP ${oldTP.toFixed(4)} → ${newTP.toFixed(4)} (ATR=${currentAtr.toFixed(4)})`);
     return { oldTP, newTP };

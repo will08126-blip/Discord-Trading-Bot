@@ -9,6 +9,9 @@ import type { StrategySignal, MultiTimeframeData, Regime } from '../types';
  *  - Confirmation: RSI divergence or engulfing reversal candle
  *
  * Suitable for: RANGE, TREND_UP (end), TREND_DOWN (end)
+ *
+ * Counter-trend sweeps (e.g. bullish reversal in TREND_DOWN) are still allowed
+ * but scored lower — they can work in choppy markets, just less reliable.
  */
 export declare class LiquiditySweepStrategy extends BaseStrategy {
     readonly name = "Liquidity Sweep";

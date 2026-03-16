@@ -10,13 +10,15 @@ const config_1 = require("../config");
  * Confidence-based risk percentages — no fixed capital required.
  * User scales these to whatever they're working with that week.
  *
- * Scalp trades get slightly higher allocation because the leverage
- * is higher and stops are tighter, so the % risk stays manageable.
+ * Increased to reflect high-conviction, high-leverage trading style where
+ * tight stops (0.3-0.5% for HYBRID) are intentional entry precision rather
+ * than wide risk management. Combined with the tight stops this produces
+ * leverage suggestions in the 10-40× range for ELITE/STRONG setups.
  */
 const RISK_PCT = {
-    scalp: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
-    hybrid: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
-    swing: { ELITE: 2.0, STRONG: 1.5, MEDIUM: 1.0, NO_TRADE: 0 },
+    scalp: { ELITE: 5.0, STRONG: 3.0, MEDIUM: 1.5, NO_TRADE: 0 },
+    hybrid: { ELITE: 5.0, STRONG: 3.0, MEDIUM: 1.5, NO_TRADE: 0 },
+    swing: { ELITE: 3.0, STRONG: 2.0, MEDIUM: 1.0, NO_TRADE: 0 },
 };
 function leverageCap(tier, tradeType) {
     const typeKey = tradeType === 'SCALP' ? 'scalp' : tradeType === 'HYBRID' ? 'hybrid' : 'swing';
@@ -97,8 +99,11 @@ function formatPrice(price, asset) {
     else if (price < 1) {
         decimals = 5; // sub-dollar assets
     }
+    else if (price < 10) {
+        decimals = 4; // $1-$10 assets like XRP — small moves matter at high leverage
+    }
     else {
-        decimals = 2; // standard (ETH, SOL, XRP)
+        decimals = 2; // higher-priced assets (ETH, SOL, BNB)
     }
     return `$${price.toLocaleString('en-US', {
         minimumFractionDigits: decimals,

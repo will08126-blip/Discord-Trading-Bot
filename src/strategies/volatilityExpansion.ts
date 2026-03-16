@@ -1,15 +1,12 @@
 import { v4 as uuidv4 } from 'uuid';
 import { BaseStrategy } from './base';
 import {
-  ema,
-  atr,
-  atrAverage,
   bollinger,
   bollingerWidthMin,
-  rsi,
   sessionQualityScore,
   isVolumeSpike,
 } from '../indicators/indicators';
+import { cachedEma, cachedAtr, cachedAtrAverage } from '../indicators/cache';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 
@@ -64,14 +61,12 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
     if (!breakUp && !breakDown) return null;
 
     // ── ATR must be expanding ─────────────────────────────────────────────
-    const atrVals15m = atr(candles15m, 14);
-    const lastAtr15m = atrVals15m[n15];
-    const avgAtr15m = atrAverage(atrVals15m, 14);
-    if (lastAtr15m <= avgAtr15m * 0.9) return null; // not expanding yet
+    const lastAtr15m = cachedAtr(candles15m, 14)[n15];
+    const avgAtr15m  = cachedAtrAverage(candles15m, 14);
+    if (lastAtr15m <= avgAtr15m * 1.1) return null; // must be genuinely expanding (>10% above avg)
 
-    const atrVals5m = atr(candles5m, 14);
-    const lastAtr5m = atrVals5m[candles5m.length - 1];
-    const avgAtr5m = atrAverage(atrVals5m, 14);
+    const lastAtr5m = cachedAtr(candles5m, 14)[candles5m.length - 1];
+    const avgAtr5m  = cachedAtrAverage(candles5m, 14);
 
     // ── Direction: 4h trend from last 10 candles ────────────────────────
     const last10_4h = candles4h.slice(-10);
@@ -112,8 +107,8 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
     const components = this.zeroComponents();
 
     // HTF alignment via 4h EMA
-    const ema20_4h = ema(candles4h, 20);
-    const ema50_4h = ema(candles4h, 50);
+    const ema20_4h = cachedEma(candles4h, 20);
+    const ema50_4h = cachedEma(candles4h, 50);
     const htfAligned =
       (isLong && ema20_4h[n4h] > ema50_4h[n4h]) ||
       (!isLong && ema20_4h[n4h] < ema50_4h[n4h]);

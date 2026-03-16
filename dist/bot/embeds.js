@@ -140,6 +140,7 @@ function buildExitAlertEmbed(position, type, currentPrice, newTP) {
     const labels = {
         TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING', color: 0x00ccff, desc: 'Price is near your take profit. Consider locking in gains.' },
         TP_HIT: { emoji: '🎯', title: 'TAKE PROFIT HIT', color: 0x00ff00, desc: 'Your take profit has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
+        SL_APPROACH: { emoji: '⚠️', title: 'STOP LOSS NEARBY', color: 0xff6600, desc: 'Price is closing in on your stop loss. Assess whether you still want to hold or cut early.' },
     };
     const { emoji, title, color, desc } = labels[type];
     const pnlPct = isLong
@@ -200,7 +201,7 @@ function buildCheckSummaryEmbed(result) {
         const risk = (0, riskCalculator_1.calculateRisk)(s);
         return (`**${name}** — ${dirEmoji(s.direction)} ${s.direction}  |  ` +
             `Score: **${s.score}/100** ${(0, votingEngine_1.tierEmoji)(s.tier)}  |  ` +
-            `Lev: **${risk.suggestedLeverage}x**  |  Risk: **${risk.riskPct}%**`);
+            `Lev: **${risk.suggestedLeverage}x**  |  Deploy: **${risk.deploymentScore}/100**`);
     });
     return new discord_js_1.EmbedBuilder()
         .setColor(0x5865f2)
@@ -230,7 +231,7 @@ function buildWatchlistEmbed(results, isLive = false) {
             const risk = (0, riskCalculator_1.calculateRisk)(s);
             return (`**${assetLabel}** ${dirEmoji(s.direction)} ${s.direction}  |  ` +
                 `Score: **${s.score}** ${(0, votingEngine_1.tierEmoji)(s.tier)}  |  ` +
-                `Lev: **${risk.suggestedLeverage}x**  |  Risk: **${risk.riskPct}%**  ` +
+                `Lev: **${risk.suggestedLeverage}x**  |  Deploy: **${risk.deploymentScore}/100**  ` +
                 `*(${s.strategy})*`);
         }).join('\n');
     });
@@ -251,18 +252,22 @@ function buildWatchlistEmbed(results, isLive = false) {
     };
 }
 // ─── Early profit alert embed ─────────────────────────────────────────────────
-function buildEarlyProfitAlertEmbed(position, currentPrice, returnOnCapital // fraction, e.g. 0.50 = 50%
+function buildEarlyProfitAlertEmbed(position, currentPrice, returnOnCapital, // fraction, e.g. 0.50 = 50%
+milestone // the specific milestone hit (same as returnOnCapital floored to milestone)
 ) {
     const asset = position.signal.asset.split('/')[0];
     const isLong = position.signal.direction === 'LONG';
     const pnlPct = isLong
         ? (currentPrice - position.entryPrice) / position.entryPrice
         : (position.entryPrice - currentPrice) / position.entryPrice;
+    // Pick emoji based on milestone magnitude
+    const milestoneEmoji = milestone >= 3.0 ? '🚀' : milestone >= 1.5 ? '💎' : milestone >= 0.75 ? '💰' : '✅';
+    const milestoneLabel = `+${(milestone * 100).toFixed(0)}% Capital`;
     const embed = new discord_js_1.EmbedBuilder()
-        .setColor(0xFFD700)
-        .setTitle(`💰 ${asset} ${position.signal.direction} — Early Profit Target Hit!`)
-        .setDescription(`Your position has returned **+${(returnOnCapital * 100).toFixed(0)}%** on capital ` +
-        `at **${position.suggestedLeverage}x** leverage. Consider taking profits or tightening your stop.`)
+        .setColor(milestone >= 1.5 ? 0x00ff87 : 0xFFD700)
+        .setTitle(`${milestoneEmoji} ${asset} ${position.signal.direction} — Profit Milestone: ${milestoneLabel}`)
+        .setDescription(`Position has returned **+${(returnOnCapital * 100).toFixed(0)}%** on capital ` +
+        `at **${position.suggestedLeverage}x** leverage. Consider taking partial profits or tightening your stop.`)
         .addFields({
         name: LINE,
         value: [
@@ -284,11 +289,63 @@ function buildEarlyProfitAlertEmbed(position, currentPrice, returnOnCapital // f
     return { embeds: [embed], components: [closeRow] };
 }
 // ─── Position health update embed ─────────────────────────────────────────────
-// Posted when price moves ≥1.5% from the last update, giving the user a quick
-// verdict on whether the trade is still healthy.
+// Posted every 15 min or when price moves ≥1% — shows live confidence meter,
+// P&L, and a verdict on whether the trade setup is still intact.
+/**
+ * Live confidence score (0-100) based on current indicators.
+ * Unlike the deployment score (which is fixed at signal time), this recalculates
+ * every health check so the meter reflects what the trade looks like RIGHT NOW.
+ *
+ *   EMA9 alignment  (0-35) — is price still on the right side of short-term trend?
+ *   RSI health       (0-30) — not overextended or collapsing
+ *   P&L direction    (0-20) — positive momentum adds confidence
+ *   Time in window   (0-15) — still within expected hold duration for this trade type
+ */
+function calcLiveConfidence(position, currentPrice, rsi14, ema9) {
+    const isLong = position.signal.direction === 'LONG';
+    let score = 0;
+    // EMA alignment
+    if (!isNaN(ema9)) {
+        const aligned = isLong ? currentPrice > ema9 : currentPrice < ema9;
+        score += aligned ? 35 : 0;
+    }
+    else {
+        score += 17;
+    }
+    // RSI
+    if (!isNaN(rsi14)) {
+        const overextended = isLong ? rsi14 > 75 : rsi14 < 25;
+        const healthy = isLong ? (rsi14 >= 45 && rsi14 <= 70) : (rsi14 >= 30 && rsi14 <= 55);
+        score += overextended ? 5 : healthy ? 30 : 15;
+    }
+    else {
+        score += 15;
+    }
+    // P&L direction
+    const pnlPct = isLong
+        ? (currentPrice - position.entryPrice) / position.entryPrice
+        : (position.entryPrice - currentPrice) / position.entryPrice;
+    score += pnlPct > 0.01 ? 20 : pnlPct > 0 ? 12 : pnlPct > -0.005 ? 5 : 0;
+    // Time in expected window
+    const hoursElapsed = (Date.now() - position.confirmedAt) / (1000 * 60 * 60);
+    const expectedHours = position.signal.tradeType === 'SCALP' ? 3
+        : position.signal.tradeType === 'HYBRID' ? 16 : 48;
+    score += hoursElapsed <= expectedHours ? 15 : hoursElapsed <= expectedHours * 1.5 ? 7 : 0;
+    return Math.min(100, Math.max(0, score));
+}
+function buildLiveConfidenceMeter(score) {
+    const filled = Math.round(score / 10);
+    const dot = score >= 70 ? '🟢' : score >= 45 ? '🟡' : '🔴';
+    const dots = dot.repeat(filled) + '⚪'.repeat(10 - filled);
+    const label = score >= 80 ? 'Setup intact — holding strong' :
+        score >= 60 ? 'Stable — conditions still favorable' :
+            score >= 40 ? 'Softening — setup weakening, watch closely' :
+                'Breaking down — consider early exit';
+    return `${dots}  ${score}/100\n${label}`;
+}
 function buildPositionHealthEmbed(position, currentPrice, rsi14, // current RSI(14) value on 5m candles
-ema9 // current EMA(9) value on 5m candles
-) {
+ema9, // current EMA(9) value on 5m candles
+trigger = 'PRICE') {
     const asset = position.signal.asset.split('/')[0];
     const isLong = position.signal.direction === 'LONG';
     const entry = position.entryPrice;
@@ -299,6 +356,8 @@ ema9 // current EMA(9) value on 5m candles
     const stopDist = Math.abs(entry - position.currentStopLoss) / entry;
     const rMultiple = stopDist > 0 ? pnlPct / stopDist : 0;
     const capitalReturn = pnlPct * position.suggestedLeverage;
+    // Live confidence meter (recalculated from current indicators)
+    const liveScore = calcLiveConfidence(position, currentPrice, rsi14, ema9);
     // Price vs EMA — most reliable trend-intact signal
     const priceAboveEma = currentPrice > ema9;
     const trendIntact = isLong ? priceAboveEma : !priceAboveEma;
@@ -326,11 +385,16 @@ ema9 // current EMA(9) value on 5m candles
     }
     const pnlSign = pnlPct >= 0 ? '+' : '';
     const capitalSign = capitalReturn >= 0 ? '+' : '';
+    const triggerLabel = trigger === 'TIME' ? '⏰ 15-min check' : '📊 Price moved 1%+';
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(color)
-        .setTitle(`📡 ${asset} ${position.signal.direction} — Trade Health Check`)
+        .setTitle(`${triggerLabel} — ${asset} ${position.signal.direction} Trade Health`)
         .setDescription(verdict)
         .addFields({
+        name: '📡 Live Confidence',
+        value: buildLiveConfidenceMeter(liveScore),
+        inline: false,
+    }, {
         name: '💰 Live P&L',
         value: [
             `Price:   **${(0, riskCalculator_1.formatPrice)(currentPrice, asset)}**  (entry: ${(0, riskCalculator_1.formatPrice)(entry, asset)})`,
@@ -343,7 +407,7 @@ ema9 // current EMA(9) value on 5m candles
         value: [
             emaStatus,
             `RSI(14): ${isNaN(rsi14) ? 'N/A' : rsi14.toFixed(1)}  ${rsiTag}`,
-            `SL: ${(0, riskCalculator_1.formatPrice)(position.currentStopLoss, asset)}  |  TP: ${(0, riskCalculator_1.formatPrice)(position.currentTakeProfit, asset)}`,
+            `TP: ${(0, riskCalculator_1.formatPrice)(position.currentTakeProfit, asset)}`,
         ].join('\n'),
         inline: false,
     })

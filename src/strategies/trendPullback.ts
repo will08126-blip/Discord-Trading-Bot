@@ -1,10 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { BaseStrategy } from './base';
 import {
-  ema,
-  rsi,
-  atr,
-  atrAverage,
   isBullishEngulfing,
   isBearishEngulfing,
   isBullishPin,
@@ -12,6 +8,7 @@ import {
   isVolumeSpike,
   sessionQualityScore,
 } from '../indicators/indicators';
+import { cachedEma, cachedRsi, cachedAtr, cachedAtrAverage } from '../indicators/cache';
 
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
@@ -40,9 +37,9 @@ export class TrendPullbackStrategy extends BaseStrategy {
     if (candles4h.length < 50 || candles15m.length < 30 || candles5m.length < 20) return null;
 
     // ── 4H: EMA alignment ────────────────────────────────────────────────────
-    const ema20_4h = ema(candles4h, 20);
-    const ema50_4h = ema(candles4h, 50);
-    const ema200_4h = ema(candles4h, 200);
+    const ema20_4h = cachedEma(candles4h, 20);
+    const ema50_4h = cachedEma(candles4h, 50);
+    const ema200_4h = cachedEma(candles4h, 200);
     const n4h = candles4h.length - 1;
 
     const htfUpAligned =
@@ -54,8 +51,8 @@ export class TrendPullbackStrategy extends BaseStrategy {
     if (!htfAligned) return null;
 
     // ── 15M: RSI pullback + price near EMA20 ─────────────────────────────────
-    const ema20_15m = ema(candles15m, 20);
-    const rsi_15m = rsi(candles15m, 14);
+    const ema20_15m = cachedEma(candles15m, 20);
+    const rsi_15m = cachedRsi(candles15m, 14);
     const n15 = candles15m.length - 1;
 
     const lastClose15 = candles15m[n15].close;
@@ -71,14 +68,13 @@ export class TrendPullbackStrategy extends BaseStrategy {
     if (!rsiPulledBack || !priceNearEma) return null;
 
     // ── 5M: Entry confirmation ─────────────────────────────────────────────
-    const ema20_5m = ema(candles5m, 20);
+    const ema20_5m = cachedEma(candles5m, 20);
     const n5 = candles5m.length - 1;
     const lastCandle5m = candles5m[n5];
     const prevCandle5m = candles5m[n5 - 1];
     const lastEma20_5m = ema20_5m[n5];
-    const atrVals5m = atr(candles5m, 14);
-    const lastAtr5m = atrVals5m[n5];
-    const avgAtr5m = atrAverage(atrVals5m, 14);
+    const lastAtr5m = cachedAtr(candles5m, 14)[n5];
+    const avgAtr5m = cachedAtrAverage(candles5m, 14);
 
     const confirmBull =
       isBullishEngulfing(candles5m.slice(-2)) ||

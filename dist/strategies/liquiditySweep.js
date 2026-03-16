@@ -4,6 +4,7 @@ exports.LiquiditySweepStrategy = void 0;
 const uuid_1 = require("uuid");
 const base_1 = require("./base");
 const indicators_1 = require("../indicators/indicators");
+const cache_1 = require("../indicators/cache");
 /**
  * Liquidity Sweep Reversal Strategy
  *
@@ -13,6 +14,9 @@ const indicators_1 = require("../indicators/indicators");
  *  - Confirmation: RSI divergence or engulfing reversal candle
  *
  * Suitable for: RANGE, TREND_UP (end), TREND_DOWN (end)
+ *
+ * Counter-trend sweeps (e.g. bullish reversal in TREND_DOWN) are still allowed
+ * but scored lower — they can work in choppy markets, just less reliable.
  */
 class LiquiditySweepStrategy extends base_1.BaseStrategy {
     name = 'Liquidity Sweep';
@@ -20,37 +24,49 @@ class LiquiditySweepStrategy extends base_1.BaseStrategy {
     analyze(data, regime) {
         if (!this.isRegimeSupported(regime))
             return null;
+        const candles4h = data['4h'];
         const candles15m = data['15m'];
         const candles5m = data['5m'];
-        if (candles15m.length < 30 || candles5m.length < 20)
+        if (candles4h.length < 14 || candles15m.length < 30 || candles5m.length < 20)
             return null;
-        const atrVals15m = (0, indicators_1.atr)(candles15m, 14);
+        const lastAtr4h = (0, cache_1.cachedAtr)(candles4h, 14)[candles4h.length - 1];
+        const atrVals15m = (0, cache_1.cachedAtr)(candles15m, 14);
         const lastAtr15m = atrVals15m[candles15m.length - 1];
-        const avgAtr15m = (0, indicators_1.atrAverage)(atrVals15m, 14);
-        const atrVals5m = (0, indicators_1.atr)(candles5m, 14);
-        const lastAtr5m = atrVals5m[candles5m.length - 1];
-        const avgAtr5m = (0, indicators_1.atrAverage)(atrVals5m, 14);
-        const rsiVals15m = (0, indicators_1.rsi)(candles15m, 14);
-        const rsiVals5m = (0, indicators_1.rsi)(candles5m, 14);
+        const avgAtr15m = (0, cache_1.cachedAtrAverage)(candles15m, 14);
+        const avgAtr5m = (0, cache_1.cachedAtrAverage)(candles5m, 14);
+        const lastAtr5m = (0, cache_1.cachedAtr)(candles5m, 14)[candles5m.length - 1];
+        const rsiVals15m = (0, cache_1.cachedRsi)(candles15m, 14);
+        // Pre-compute RSI on 5m ONCE here — passed into the inner loop so it is
+        // never recomputed per swing level (was previously called inside a nested loop).
+        const rsiVals5m = (0, cache_1.cachedRsi)(candles5m, 14);
+        // ── 4H trend direction (for counter-trend detection) ────────────────────
+        const ema20_4h = (0, cache_1.cachedEma)(candles4h, 20);
+        const ema50_4h = (0, cache_1.cachedEma)(candles4h, 50);
+        const n4h = candles4h.length - 1;
+        const trend4hUp = ema20_4h[n4h] > ema50_4h[n4h];
+        const trend4hDown = ema20_4h[n4h] < ema50_4h[n4h];
         // ── Find swing highs/lows on 15m (last 20 candles) ─────────────────────
         const swings = (0, indicators_1.swingPoints)(candles15m.slice(-20), 3, 3, 10);
-        // ── Look at the last 3 candles on 15m for a sweep ──────────────────────
-        const n15 = candles15m.length - 1;
-        // Check for bearish sweep (sweep HIGH → bullish reversal)
         const recentHighSwings = swings.filter((s) => s.type === 'HIGH');
         const recentLowSwings = swings.filter((s) => s.type === 'LOW');
         // Bullish reversal signal: sweep of lows then bounce up
-        const bullSignal = this.checkSweepReversal(candles15m, candles5m, rsiVals15m, recentLowSwings.map((s) => s.price), lastAtr15m, lastAtr5m, avgAtr5m, true, regime);
+        const bullSignal = this.checkSweepReversal(candles15m, candles5m, rsiVals15m, rsiVals5m, recentLowSwings.map((s) => s.price), lastAtr15m, lastAtr5m, avgAtr5m, lastAtr4h, true, regime, trend4hUp, trend4hDown);
         if (bullSignal)
             return { ...bullSignal, asset: data.asset };
         // Bearish reversal signal: sweep of highs then drop
-        const bearSignal = this.checkSweepReversal(candles15m, candles5m, rsiVals15m, recentHighSwings.map((s) => s.price), lastAtr15m, lastAtr5m, avgAtr5m, false, regime);
+        const bearSignal = this.checkSweepReversal(candles15m, candles5m, rsiVals15m, rsiVals5m, recentHighSwings.map((s) => s.price), lastAtr15m, lastAtr5m, avgAtr5m, lastAtr4h, false, regime, trend4hUp, trend4hDown);
         if (bearSignal)
             return { ...bearSignal, asset: data.asset };
         return null;
     }
-    checkSweepReversal(candles15m, candles5m, rsiVals15m, swingPrices, lastAtr15m, lastAtr5m, avgAtr5m, isBullReversal, regime) {
+    checkSweepReversal(candles15m, candles5m, rsiVals15m, rsiVals5m, // pre-computed outside the loop — no redundant recalculation
+    swingPrices, lastAtr15m, lastAtr5m, avgAtr5m, lastAtr4h, isBullReversal, regime, trend4hUp, trend4hDown) {
         const n15 = candles15m.length - 1;
+        // Counter-trend: bullish reversal in a clear downtrend (or vice versa).
+        // Not a hard block — sweeps can work even against the HTF trend in RANGE —
+        // but it is penalised in the regime score below.
+        const isCounterTrend = (isBullReversal && trend4hDown) ||
+            (!isBullReversal && trend4hUp);
         for (const swingLevel of swingPrices) {
             // Check last 2 candles on 15m for sweep
             for (let i = n15; i >= n15 - 2; i--) {
@@ -68,10 +84,9 @@ class LiquiditySweepStrategy extends base_1.BaseStrategy {
                     c.close < swingLevel;
                 if (!isSweepBull && !isSweepBear)
                     continue;
-                // Confirmation on 5m
+                // Confirmation on 5m — rsiVals5m already computed, reuse it here
                 const n5 = candles5m.length - 1;
                 const lastCandle5m = candles5m[n5];
-                const rsiVals5m = (0, indicators_1.rsi)(candles5m, 14);
                 const confirmed = isBullReversal
                     ? (0, indicators_1.isBullishEngulfing)(candles5m.slice(-3)) ||
                         (0, indicators_1.hasBullishDivergence)(candles5m.slice(-20), rsiVals5m.slice(-20))
@@ -87,21 +102,23 @@ class LiquiditySweepStrategy extends base_1.BaseStrategy {
                 const wickRatio = bodySize > 0 ? wickSize / bodySize : 0;
                 // Build signal
                 const entryMid = lastCandle5m.close;
-                // SL: behind the sweep wick with wider buffer (0.7×ATR) — wicks can extend on sweeps
+                // SL: behind the sweep wick using avgAtr (not lastAtr) for stability.
+                // Using the instantaneous ATR from the spike candle inflates the buffer;
+                // avgAtr gives a more representative risk distance.
                 const stopLoss = isBullReversal
-                    ? c.low - lastAtr5m * 0.7
-                    : c.high + lastAtr5m * 0.7;
+                    ? c.low - avgAtr5m * 0.7
+                    : c.high + avgAtr5m * 0.7;
                 const stopDistance = Math.abs(entryMid - stopLoss);
-                // TP: 2.5:1 R:R — liquidity sweeps are reversals; more conservative than trend trades
-                const takeProfit = isBullReversal
-                    ? entryMid + stopDistance * 2.5
-                    : entryMid - stopDistance * 2.5;
+                const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
+                const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+                const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
+                const takeProfit = isBullReversal ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
                 const entryZone = isBullReversal
-                    ? [entryMid - lastAtr5m * 0.1, entryMid + lastAtr5m * 0.2]
-                    : [entryMid - lastAtr5m * 0.2, entryMid + lastAtr5m * 0.1];
+                    ? [entryMid - avgAtr5m * 0.1, entryMid + avgAtr5m * 0.2]
+                    : [entryMid - avgAtr5m * 0.2, entryMid + avgAtr5m * 0.1];
                 // ── Scoring ──────────────────────────────────────────────────
                 const components = this.zeroComponents();
-                // HTF: check EMA
+                // HTF: check EMA alignment on 15m
                 const ema20 = (0, indicators_1.ema)(candles15m, 20);
                 const ema50 = (0, indicators_1.ema)(candles15m, 50);
                 const n = candles15m.length - 1;
@@ -116,8 +133,18 @@ class LiquiditySweepStrategy extends base_1.BaseStrategy {
                 // Volatility
                 const atrRatio = lastAtr5m / avgAtr5m;
                 components.volatilityQuality = atrRatio < 2.0 ? 8 : 4;
-                // Regime fit: range is ideal
-                components.regimeFit = regime === 'RANGE' ? 10 : 6;
+                // Regime fit: RANGE is ideal; counter-trend trades in trending markets get penalised.
+                // A counter-trend trade has higher failure risk when HTF momentum is intact,
+                // so we knock 4 points off the regime score as a systematic handicap.
+                if (regime === 'RANGE') {
+                    components.regimeFit = 10;
+                }
+                else if (isCounterTrend) {
+                    components.regimeFit = 3; // significant penalty — still tradeable but must score elsewhere
+                }
+                else {
+                    components.regimeFit = 6; // with-trend sweep in a trending regime
+                }
                 // Volume at sweep
                 const avgVol15m = candles15m.slice(-20).reduce((s, cv) => s + cv.volume, 0) / 20;
                 components.liquidity = c.volume > avgVol15m * 1.3 ? 10 : 6;
@@ -131,8 +158,6 @@ class LiquiditySweepStrategy extends base_1.BaseStrategy {
                 const tier = score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
                 if (tier === 'NO_TRADE')
                     continue;
-                const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-                const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
                 // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
                 if (tradeType === 'SCALP' && (0, indicators_1.sessionQualityScore)() <= 2)
                     continue;
@@ -150,7 +175,7 @@ class LiquiditySweepStrategy extends base_1.BaseStrategy {
                     tier,
                     regime,
                     timestamp: Date.now(),
-                    notes: `Sweep@${swingLevel.toFixed(2)}, WickRatio=${wickRatio.toFixed(1)}`,
+                    notes: `Sweep@${swingLevel.toFixed(2)}, WickRatio=${wickRatio.toFixed(1)}${isCounterTrend ? ' [counter-trend]' : ''}`,
                 };
             }
         }

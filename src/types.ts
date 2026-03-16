@@ -32,7 +32,7 @@ export interface MultiTimeframeData {
   '4h': OHLCV[];
   '15m': OHLCV[];
   '5m': OHLCV[];
-  '1m': OHLCV[];
+  '1m'?: OHLCV[]; // fetched on demand; not used by any current strategy
 }
 
 export interface ScoreComponents {
@@ -82,7 +82,11 @@ export interface ActivePosition {
   tpExtensionCount: number;    // TP extensions used (milestone auto + momentum, max 5)
   exitAlertSent: boolean;      // legacy field — kept for persisted-position compat
   // Multi-level profit milestone tracking
-  lastProfitMilestonePct?: number;  // highest capital-return milestone alerted (fraction, e.g. 0.75 = 75%)
+  // Stored as a sorted array (serialisable). Each milestone fires exactly once,
+  // regardless of whether price pulls back and rallies through it again.
+  firedMilestones?: number[];
+  /** @deprecated replaced by firedMilestones; kept for backward-compat with persisted positions */
+  lastProfitMilestonePct?: number;
   // SL proximity alert tracking
   slProximityAlertAt?: number;      // timestamp of last SL proximity alert
   // Price-move health update tracking
