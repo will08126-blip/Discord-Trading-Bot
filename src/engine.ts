@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import type { TextChannel } from 'discord.js';
 import { discordClient } from './bot/client';
-import { fetchAllAssets, fetchOHLCV } from './data/marketData';
+import { fetchAllAssets, fetchOHLCV, fetchCurrentPrice } from './data/marketData';
 import { detectRegime, isTradeableRegime, setLastRegime } from './regime/regimeDetector';
 import { TrendPullbackStrategy } from './strategies/trendPullback';
 import { BreakoutRetestStrategy } from './strategies/breakoutRetest';
@@ -130,8 +130,10 @@ async function monitorActivePositions() {
   for (const position of positions) {
     try {
       const asset = position.signal.asset as Asset;
-      const candles5m = await fetchOHLCV(asset, '5m');
-      const currentPrice = candles5m[candles5m.length - 1].close;
+      const [candles5m, currentPrice] = await Promise.all([
+        fetchOHLCV(asset, '5m'),
+        fetchCurrentPrice(asset),
+      ]);
 
       // ── Profit milestone alerts ───────────────────────────────────────
       // Fire at each milestone (25%, 75%, 150%, 300% capital return), independently.

@@ -81,19 +81,14 @@ export function detectRegime(asset: Asset, candles4h: OHLCV[]): RegimeResult {
   const emaDownAligned = lastEma20 < lastEma50 && lastEma50 < lastEma200;
   const emaAligned = emaUpAligned || emaDownAligned;
 
-  // Low volume check
-  const avgVol =
-    candles4h
-      .slice(-20)
-      .map((c) => c.volume)
-      .reduce((a, b) => a + b, 0) / 20;
-  const lastVol = candles4h[n - 1].volume;
-  const lowVolume = lastVol < avgVol * MIN_VOLUME_PERCENTILE;
-
-  if (lowVolume) {
+  // ── Volatility Expansion — checked BEFORE the volume gate ─────────────────
+  // A breakout candle still forming will look low-volume even while ATR is
+  // exploding. Detecting the expansion first prevents these moves being
+  // silently dropped as POOR before the volume check is even reached.
+  if (atrRatio > ATR_EXPANSION_RATIO) {
     return {
       asset,
-      regime: 'POOR',
+      regime: 'VOL_EXPANSION',
       adx: lastAdx,
       atrRatio,
       emaAligned,
@@ -101,11 +96,21 @@ export function detectRegime(asset: Asset, candles4h: OHLCV[]): RegimeResult {
     };
   }
 
-  // Volatility Expansion
-  if (atrRatio > ATR_EXPANSION_RATIO) {
+  // Low volume check — use the last CLOSED candle (n-2), not the forming one (n-1).
+  // A 4H candle that has only been open for 30 minutes will always look
+  // low-volume compared to fully-closed candles, causing false POOR flags.
+  const volCandle = n >= 2 ? candles4h[n - 2] : candles4h[n - 1];
+  const avgVol =
+    candles4h
+      .slice(-20)
+      .map((c) => c.volume)
+      .reduce((a, b) => a + b, 0) / 20;
+  const lowVolume = volCandle.volume < avgVol * MIN_VOLUME_PERCENTILE;
+
+  if (lowVolume) {
     return {
       asset,
-      regime: 'VOL_EXPANSION',
+      regime: 'POOR',
       adx: lastAdx,
       atrRatio,
       emaAligned,
@@ -128,7 +133,7 @@ export function detectRegime(asset: Asset, candles4h: OHLCV[]): RegimeResult {
     };
   }
 
-  // Strong uptrend
+  // Strong established uptrend (full 3-EMA alignment)
   if (
     lastAdx > ADX_TREND_THRESHOLD &&
     emaUpAligned &&
@@ -145,7 +150,25 @@ export function detectRegime(asset: Asset, candles4h: OHLCV[]): RegimeResult {
     };
   }
 
-  // Strong downtrend
+  // Fresh breakout uptrend — EMA20 crossed EMA50 but EMA200 hasn't caught up yet.
+  // High ADX + clear directional dominance (PDI > MDI by 50%) = valid trend signal.
+  if (
+    lastAdx > 35 &&
+    lastEma20 > lastEma50 &&
+    lastClose > lastEma50 &&
+    lastPdi > lastMdi * 1.5
+  ) {
+    return {
+      asset,
+      regime: 'TREND_UP',
+      adx: lastAdx,
+      atrRatio,
+      emaAligned: false,
+      timestamp: Date.now(),
+    };
+  }
+
+  // Strong established downtrend (full 3-EMA alignment)
   if (
     lastAdx > ADX_TREND_THRESHOLD &&
     emaDownAligned &&
@@ -158,6 +181,23 @@ export function detectRegime(asset: Asset, candles4h: OHLCV[]): RegimeResult {
       adx: lastAdx,
       atrRatio,
       emaAligned: true,
+      timestamp: Date.now(),
+    };
+  }
+
+  // Fresh breakdown downtrend — EMA20 crossed below EMA50, strong directional dominance.
+  if (
+    lastAdx > 35 &&
+    lastEma20 < lastEma50 &&
+    lastClose < lastEma50 &&
+    lastMdi > lastPdi * 1.5
+  ) {
+    return {
+      asset,
+      regime: 'TREND_DOWN',
+      adx: lastAdx,
+      atrRatio,
+      emaAligned: false,
       timestamp: Date.now(),
     };
   }
