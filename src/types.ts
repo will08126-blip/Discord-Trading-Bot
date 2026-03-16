@@ -79,8 +79,12 @@ export interface ActivePosition {
   highestPrice: number;        // for long TP extension tracking (peak since entry)
   lowestPrice: number;         // for short TP extension tracking (trough since entry)
   lastSLTPUpdateAt: number;    // timestamp of last adjustment
-  tpExtensionCount: number;    // momentum-based TP extensions used (max 2)
-  exitAlertSent: boolean;
+  tpExtensionCount: number;    // TP extensions used (milestone auto + momentum, max 5)
+  exitAlertSent: boolean;      // legacy field — kept for persisted-position compat
+  // Multi-level profit milestone tracking
+  lastProfitMilestonePct?: number;  // highest capital-return milestone alerted (fraction, e.g. 0.75 = 75%)
+  // SL proximity alert tracking
+  slProximityAlertAt?: number;      // timestamp of last SL proximity alert
   // Price-move health update tracking
   lastHealthUpdatePrice?: number;  // price at time of last health update notification
   lastHealthUpdateAt?: number;     // timestamp of last health update notification

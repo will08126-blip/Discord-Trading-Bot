@@ -37,10 +37,21 @@ import { logger } from './utils/logger';
 import type { Asset, MultiTimeframeData, RegimeResult, StrategySignal } from './types';
 
 // Minimum price move (fraction) before posting a health update for an active position.
-// 0.015 = 1.5% — meaningful enough to warrant a re-assessment without being too noisy.
-const HEALTH_UPDATE_THRESHOLD = 0.015;
-// Minimum time between health updates for the same position (ms) — prevents spam on volatile candles
-const HEALTH_UPDATE_MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+// 0.005 = 0.5% — at 35x leverage this is already a 17.5% capital swing, enough to warrant an update.
+const HEALTH_UPDATE_THRESHOLD = 0.005;
+// Minimum time between health updates for the same position (ms) — prevents spam on volatile candles.
+// Matches the scan interval so no update is ever delayed more than one cycle.
+const HEALTH_UPDATE_MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Capital-return milestones that trigger profit alerts (fraction of capital).
+// Each milestone fires once and independently — positions get 1–4 profit pings through a big move.
+const PROFIT_MILESTONES = [0.25, 0.75, 1.50, 3.00]; // 25%, 75%, 150%, 300%
+
+// SL proximity: warn when price is within this multiple of the stop distance from the SL level.
+// 1.5× means: if stop is $0.35, warn when price is within $0.53 of the SL.
+const SL_PROXIMITY_MULTIPLIER = 1.5;
+// Minimum cooldown between SL proximity alerts for the same position (ms).
+const SL_PROXIMITY_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 
 const strategies = [
   new TrendPullbackStrategy(),
@@ -127,23 +138,45 @@ async function monitorActivePositions() {
       const candles5m = await fetchOHLCV(asset, '5m');
       const currentPrice = candles5m[candles5m.length - 1].close;
 
-      // ── Early profit alert ────────────────────────────────────────────
-      // Fire once when capital return crosses earlyProfitAlertPct threshold.
-      const earlyAlertThreshold = config.trading.earlyProfitAlertPct;
-      if (earlyAlertThreshold > 0 && !position.exitAlertSent) {
-        const isLong = position.signal.direction === 'LONG';
-        const priceMoved = isLong
-          ? (currentPrice - position.entryPrice) / position.entryPrice
-          : (position.entryPrice - currentPrice) / position.entryPrice;
-        const capitalReturn = priceMoved * position.suggestedLeverage;
-        if (capitalReturn >= earlyAlertThreshold) {
-          position.exitAlertSent = true; // reuse flag — fires once per position
-          const channel = await discordClient.channels.fetch(position.channelId);
-          if (channel?.isTextBased()) {
-            await (channel as TextChannel).send(
-              buildEarlyProfitAlertEmbed(position, currentPrice, capitalReturn)
-            );
-          }
+      // ── Profit milestone alerts ───────────────────────────────────────
+      // Fire at each milestone (25%, 75%, 150%, 300% capital return), independently.
+      // Much better than the old single-fire flag — positions get up to 4 profit pings.
+      const isLong = position.signal.direction === 'LONG';
+      const priceMoved = isLong
+        ? (currentPrice - position.entryPrice) / position.entryPrice
+        : (position.entryPrice - currentPrice) / position.entryPrice;
+      const capitalReturn = priceMoved * position.suggestedLeverage;
+      const lastMilestone = position.lastProfitMilestonePct ?? -1;
+      const hitMilestone = PROFIT_MILESTONES.find(m => m > lastMilestone && capitalReturn >= m);
+      if (hitMilestone !== undefined) {
+        position.lastProfitMilestonePct = hitMilestone;
+        const profitChannel = await discordClient.channels.fetch(position.channelId);
+        if (profitChannel?.isTextBased()) {
+          await (profitChannel as TextChannel).send(
+            buildEarlyProfitAlertEmbed(position, currentPrice, capitalReturn, hitMilestone)
+          );
+        }
+      }
+
+      // ── SL proximity alert ────────────────────────────────────────────
+      // Warn when price is within SL_PROXIMITY_MULTIPLIER × stopDist of the SL level.
+      // Helps the user decide whether to cut early before the stop is hit.
+      const stopDist = Math.abs(position.entryPrice - position.signal.stopLoss);
+      const distanceToSL = isLong
+        ? currentPrice - position.currentStopLoss
+        : position.currentStopLoss - currentPrice;
+      const timeSinceSLAlert = Date.now() - (position.slProximityAlertAt ?? 0);
+      if (
+        distanceToSL > 0 &&
+        distanceToSL < stopDist * SL_PROXIMITY_MULTIPLIER &&
+        timeSinceSLAlert > SL_PROXIMITY_COOLDOWN_MS
+      ) {
+        position.slProximityAlertAt = Date.now();
+        const slChannel = await discordClient.channels.fetch(position.channelId);
+        if (slChannel?.isTextBased()) {
+          await (slChannel as TextChannel).send(
+            buildExitAlertEmbed(position, 'SL_APPROACH', currentPrice)
+          );
         }
       }
 

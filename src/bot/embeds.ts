@@ -164,7 +164,7 @@ export function buildPositionEmbed(position: ActivePosition, currentPrice?: numb
 
 export function buildExitAlertEmbed(
   position: ActivePosition,
-  type: 'TP_APPROACH' | 'TP_HIT',
+  type: 'TP_APPROACH' | 'TP_HIT' | 'SL_APPROACH',
   currentPrice: number,
   newTP?: number
 ) {
@@ -172,8 +172,9 @@ export function buildExitAlertEmbed(
   const isLong = position.signal.direction === 'LONG';
 
   const labels: Record<string, { emoji: string; title: string; color: number; desc: string }> = {
-    TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING', color: 0x00ccff, desc: 'Price is near your take profit. Consider locking in gains.' },
-    TP_HIT:      { emoji: '🎯', title: 'TAKE PROFIT HIT', color: 0x00ff00, desc: 'Your take profit has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
+    TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING',      color: 0x00ccff, desc: 'Price is near your take profit. Consider locking in gains.' },
+    TP_HIT:      { emoji: '🎯', title: 'TAKE PROFIT HIT',     color: 0x00ff00, desc: 'Your take profit has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
+    SL_APPROACH: { emoji: '⚠️', title: 'STOP LOSS NEARBY',   color: 0xff6600, desc: 'Price is closing in on your stop loss. Assess whether you still want to hold or cut early.' },
   };
 
   const { emoji, title, color, desc } = labels[type];
@@ -321,7 +322,8 @@ export function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive = f
 export function buildEarlyProfitAlertEmbed(
   position: ActivePosition,
   currentPrice: number,
-  returnOnCapital: number   // fraction, e.g. 0.50 = 50%
+  returnOnCapital: number,   // fraction, e.g. 0.50 = 50%
+  milestone: number          // the specific milestone hit (same as returnOnCapital floored to milestone)
 ) {
   const asset = position.signal.asset.split('/')[0];
   const isLong = position.signal.direction === 'LONG';
@@ -329,12 +331,16 @@ export function buildEarlyProfitAlertEmbed(
     ? (currentPrice - position.entryPrice) / position.entryPrice
     : (position.entryPrice - currentPrice) / position.entryPrice;
 
+  // Pick emoji based on milestone magnitude
+  const milestoneEmoji = milestone >= 3.0 ? '🚀' : milestone >= 1.5 ? '💎' : milestone >= 0.75 ? '💰' : '✅';
+  const milestoneLabel = `+${(milestone * 100).toFixed(0)}% Capital`;
+
   const embed = new EmbedBuilder()
-    .setColor(0xFFD700)
-    .setTitle(`💰 ${asset} ${position.signal.direction} — Early Profit Target Hit!`)
+    .setColor(milestone >= 1.5 ? 0x00ff87 : 0xFFD700)
+    .setTitle(`${milestoneEmoji} ${asset} ${position.signal.direction} — Profit Milestone: ${milestoneLabel}`)
     .setDescription(
-      `Your position has returned **+${(returnOnCapital * 100).toFixed(0)}%** on capital ` +
-      `at **${position.suggestedLeverage}x** leverage. Consider taking profits or tightening your stop.`
+      `Position has returned **+${(returnOnCapital * 100).toFixed(0)}%** on capital ` +
+      `at **${position.suggestedLeverage}x** leverage. Consider taking partial profits or tightening your stop.`
     )
     .addFields({
       name: LINE,
