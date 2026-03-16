@@ -15,9 +15,6 @@ import {
 } from '../indicators/indicators';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
-// Number of 4H ATR lengths projected forward for the macro TP target.
-// At ~$4 ATR for SOL@$88, this produces a ~$144 TP (matches the user's chart-based targets).
-const TP_ATR4H_MULTIPLIER = 14;
 
 /**
  * Liquidity Sweep Reversal Strategy
@@ -163,11 +160,11 @@ export class LiquiditySweepStrategy extends BaseStrategy {
           : c.high + lastAtr5m * 0.7;
 
         const stopDistance = Math.abs(entryMid - stopLoss);
-        // TP: macro target using 4H ATR — projects to major chart resistance/support.
-        // e.g. SOL@$87 with 4H ATR=$4 → TP=$143. Falls back to 2.5:1 R:R if 4H ATR unavailable.
-        const takeProfit = (lastAtr4h && !isNaN(lastAtr4h))
-          ? (isBullReversal ? entryMid + lastAtr4h * TP_ATR4H_MULTIPLIER : entryMid - lastAtr4h * TP_ATR4H_MULTIPLIER)
-          : (isBullReversal ? entryMid + stopDistance * 2.5 : entryMid - stopDistance * 2.5);
+        // TP: trade-type-aware R:R target (classify first so multiplier matches holding horizon).
+        const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
+        const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+        const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
+        const takeProfit = isBullReversal ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
 
         const entryZone: [number, number] = isBullReversal
           ? [entryMid - lastAtr5m * 0.1, entryMid + lastAtr5m * 0.2]
@@ -217,9 +214,6 @@ export class LiquiditySweepStrategy extends BaseStrategy {
           score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
 
         if (tier === 'NO_TRADE') continue;
-
-        const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-        const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
 
         // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
         if (tradeType === 'SCALP' && sessionQualityScore() <= 2) continue;

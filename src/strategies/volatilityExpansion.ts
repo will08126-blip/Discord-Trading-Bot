@@ -12,8 +12,6 @@ import {
 } from '../indicators/indicators';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
-// Number of 4H ATR lengths projected forward for the macro TP target.
-const TP_ATR4H_MULTIPLIER = 10;
 
 /**
  * Volatility Expansion Strategy
@@ -99,13 +97,11 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
       : upperBand15m + lastAtr15m * 0.5;
 
     const stopDistance = Math.abs(entryMid - stopLoss);
-    // TP: macro target using 4H ATR — volatility expansions project to key chart levels.
-    // Falls back to 3.5:1 R:R if 4H ATR unavailable.
-    const atrVals4h = atr(candles4h, 14);
-    const lastAtr4h = atrVals4h[n4h];
-    const takeProfit = (lastAtr4h && !isNaN(lastAtr4h))
-      ? (isLong ? entryMid + lastAtr4h * TP_ATR4H_MULTIPLIER : entryMid - lastAtr4h * TP_ATR4H_MULTIPLIER)
-      : (isLong ? entryMid + stopDistance * 3.5 : entryMid - stopDistance * 3.5);
+    // TP: trade-type-aware R:R target (classify first so multiplier matches holding horizon).
+    const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
+    const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+    const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
+    const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
 
     const entryZone: [number, number] = [
       entryMid - lastAtr5m * 0.15,
@@ -154,9 +150,6 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
       score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
 
     if (tier === 'NO_TRADE') return null;
-
-    const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-    const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
 
     // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
     if (tradeType === 'SCALP' && sessionQualityScore() <= 2) return null;

@@ -113,8 +113,10 @@ export function formatPrice(price: number, asset: string): string {
     decimals = 8;  // micro-caps like PEPE (~0.000012)
   } else if (price < 1) {
     decimals = 5;  // sub-dollar assets
+  } else if (price < 10) {
+    decimals = 4;  // $1-$10 assets like XRP — small moves matter at high leverage
   } else {
-    decimals = 2;  // standard (ETH, SOL, XRP)
+    decimals = 2;  // higher-priced assets (ETH, SOL, BNB)
   }
   return `$${price.toLocaleString('en-US', {
     minimumFractionDigits: decimals,

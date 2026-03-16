@@ -13,9 +13,6 @@ import {
   sessionQualityScore,
 } from '../indicators/indicators';
 
-// Number of 4H ATR lengths projected forward for the macro TP target.
-// At ~$4 ATR for SOL@$88, this produces a ~$144 TP (matches the user's chart-based targets).
-const TP_ATR4H_MULTIPLIER = 16;
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 /**
@@ -117,14 +114,16 @@ export class TrendPullbackStrategy extends BaseStrategy {
       ? swingLow - lastAtr5m * 1.0
       : swingHigh + lastAtr5m * 1.0;
 
-    // TP: macro target based on 4H ATR — projects to major chart resistance levels.
-    // e.g. SOL@$88 with 4H ATR=$4 → TP=$152. Falls back to 3:1 R:R if 4H ATR is bad.
-    const atrVals4h = atr(candles4h, 14);
-    const lastAtr4h = atrVals4h[n4h];
+    // TP: trade-type-aware R:R target.
+    // Classify trade type first so the TP reflects the realistic holding horizon.
+    //   SCALP  (SL < 0.3%):  4:1 R:R — very tight, quick exit
+    //   HYBRID (SL 0.3-1.5%): 3:1 R:R — moderate; holds hours to a day
+    //   SWING  (SL > 1.5%):  2.5:1 R:R — wider room, targets key structural level
     const stopDistance = Math.abs(entryMid - stopLoss);
-    const takeProfit = (lastAtr4h && !isNaN(lastAtr4h))
-      ? (isLong ? entryMid + lastAtr4h * TP_ATR4H_MULTIPLIER : entryMid - lastAtr4h * TP_ATR4H_MULTIPLIER)
-      : (isLong ? entryMid + stopDistance * 3.0 : entryMid - stopDistance * 3.0);
+    const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
+    const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+    const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
+    const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
 
     // ── Scoring ───────────────────────────────────────────────────────────────
     const components = this.zeroComponents();
@@ -168,9 +167,6 @@ export class TrendPullbackStrategy extends BaseStrategy {
       score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
 
     if (tier === 'NO_TRADE') return null;
-
-    const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-    const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
 
     // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
     if (tradeType === 'SCALP' && sessionQualityScore() <= 2) return null;
