@@ -19,14 +19,19 @@ const signalManager_1 = require("./signals/signalManager");
 const adaptation_1 = require("./adaptation/adaptation");
 const embeds_1 = require("./bot/embeds");
 const summaries_1 = require("./llm/summaries");
-const indicators_1 = require("./indicators/indicators");
+const cache_1 = require("./indicators/cache");
 const config_1 = require("./config");
 const logger_1 = require("./utils/logger");
-// Minimum price move (fraction) before posting a health update for an active position.
-// 0.015 = 1.5% — meaningful enough to warrant a re-assessment without being too noisy.
-const HEALTH_UPDATE_THRESHOLD = 0.015;
-// Minimum time between health updates for the same position (ms) — prevents spam on volatile candles
-const HEALTH_UPDATE_MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+// Capital-return milestones that trigger profit alerts (fraction of capital).
+// Each milestone fires once and independently — positions get 1–4 profit pings through a big move.
+const PROFIT_MILESTONES = [0.25, 0.75, 1.50, 3.00]; // 25%, 75%, 150%, 300%
+// Position health checks fire on two independent triggers:
+//   TIME:  at least every 15 minutes regardless of price action
+//   PRICE: whenever spot moves ≥1% from the last update price
+// A 5-minute minimum gap between updates prevents spam on fast-moving candles.
+const HEALTH_PRICE_TRIGGER_PCT = 0.01; // 1% spot move
+const HEALTH_TIME_TRIGGER_MS = 15 * 60 * 1000; // 15-minute periodic check
+const HEALTH_MIN_GAP_MS = 5 * 60 * 1000; // spam guard
 const strategies = [
     new trendPullback_1.TrendPullbackStrategy(),
     new breakoutRetest_1.BreakoutRetestStrategy(),
@@ -36,18 +41,16 @@ const strategies = [
 async function scanSingleAsset(symbol) {
     try {
         const asset = symbol;
-        const [candles4h, candles15m, candles5m, candles1m] = await Promise.all([
+        const [candles4h, candles15m, candles5m] = await Promise.all([
             (0, marketData_1.fetchOHLCV)(asset, '4h', 200),
             (0, marketData_1.fetchOHLCV)(asset, '15m', 200),
             (0, marketData_1.fetchOHLCV)(asset, '5m', 200),
-            (0, marketData_1.fetchOHLCV)(asset, '1m', 200),
         ]);
         const mtfData = {
             asset,
             '4h': candles4h,
             '15m': candles15m,
             '5m': candles5m,
-            '1m': candles1m,
         };
         const regime = (0, regimeDetector_1.detectRegime)(asset, candles4h);
         (0, regimeDetector_1.setLastRegime)(asset, regime);
@@ -96,51 +99,72 @@ async function monitorActivePositions() {
     for (const position of positions) {
         try {
             const asset = position.signal.asset;
-            const candles5m = await (0, marketData_1.fetchOHLCV)(asset, '5m');
-            const currentPrice = candles5m[candles5m.length - 1].close;
-            // ── Early profit alert ────────────────────────────────────────────
-            // Fire once when capital return crosses earlyProfitAlertPct threshold.
-            const earlyAlertThreshold = config_1.config.trading.earlyProfitAlertPct;
-            if (earlyAlertThreshold > 0 && !position.exitAlertSent) {
-                const isLong = position.signal.direction === 'LONG';
-                const priceMoved = isLong
-                    ? (currentPrice - position.entryPrice) / position.entryPrice
-                    : (position.entryPrice - currentPrice) / position.entryPrice;
-                const capitalReturn = priceMoved * position.suggestedLeverage;
-                if (capitalReturn >= earlyAlertThreshold) {
-                    position.exitAlertSent = true; // reuse flag — fires once per position
-                    const channel = await client_1.discordClient.channels.fetch(position.channelId);
-                    if (channel?.isTextBased()) {
-                        await channel.send((0, embeds_1.buildEarlyProfitAlertEmbed)(position, currentPrice, capitalReturn));
+            const [candles5m, currentPrice] = await Promise.all([
+                (0, marketData_1.fetchOHLCV)(asset, '5m'),
+                (0, marketData_1.fetchCurrentPrice)(asset),
+            ]);
+            // ── Profit milestone alerts ───────────────────────────────────────
+            // ALL exceeded milestones fire in a single cycle — no one-per-cycle drip.
+            // firedMilestones is a Set stored as an array for JSON serialisation.
+            // Falls back to legacy lastProfitMilestonePct for positions saved before this update.
+            const isLong = position.signal.direction === 'LONG';
+            const priceMoved = isLong
+                ? (currentPrice - position.entryPrice) / position.entryPrice
+                : (position.entryPrice - currentPrice) / position.entryPrice;
+            const capitalReturn = priceMoved * position.suggestedLeverage;
+            const alreadyFired = new Set(position.firedMilestones ??
+                (position.lastProfitMilestonePct !== undefined
+                    ? PROFIT_MILESTONES.filter(m => m <= position.lastProfitMilestonePct)
+                    : []));
+            const toFire = PROFIT_MILESTONES.filter(m => !alreadyFired.has(m) && capitalReturn >= m);
+            if (toFire.length > 0) {
+                for (const milestone of toFire) {
+                    alreadyFired.add(milestone);
+                    const profitChannel = await client_1.discordClient.channels.fetch(position.channelId);
+                    if (profitChannel?.isTextBased()) {
+                        await profitChannel.send((0, embeds_1.buildEarlyProfitAlertEmbed)(position, currentPrice, capitalReturn, milestone));
                     }
                 }
+                position.firedMilestones = [...alreadyFired].sort((a, b) => a - b);
             }
-            // ── Position health update on significant price moves ──────────────────
-            // When price moves ≥1.5% from the last update price, post a health check
-            // embed telling the user if the trade still looks valid. Minimum 10-minute
-            // gap between updates to avoid spamming during volatile candles.
+            // ── Position health check ─────────────────────────────────────────────
+            // Fires when: (a) 15 min have passed since last check (periodic), OR
+            //             (b) price has moved ≥1% since the last update (price-triggered).
+            // A 5-minute minimum gap prevents spam on fast-moving candles.
             const refPrice = position.lastHealthUpdatePrice ?? position.entryPrice;
             const priceMoveSinceUpdate = Math.abs(currentPrice - refPrice) / refPrice;
             const timeSinceUpdate = Date.now() - (position.lastHealthUpdateAt ?? 0);
-            if (priceMoveSinceUpdate >= HEALTH_UPDATE_THRESHOLD
-                && timeSinceUpdate >= HEALTH_UPDATE_MIN_INTERVAL_MS) {
+            const timeTriggered = timeSinceUpdate >= HEALTH_TIME_TRIGGER_MS;
+            const priceTriggered = priceMoveSinceUpdate >= HEALTH_PRICE_TRIGGER_PCT
+                && timeSinceUpdate >= HEALTH_MIN_GAP_MS;
+            if (timeTriggered || priceTriggered) {
                 try {
-                    const rsiVals = (0, indicators_1.rsi)(candles5m, 14);
-                    const emaVals = (0, indicators_1.ema)(candles5m, 9);
+                    const rsiVals = (0, cache_1.cachedRsi)(candles5m, 14);
+                    const emaVals = (0, cache_1.cachedEma)(candles5m, 9);
                     const currentRsi = rsiVals[rsiVals.length - 1] ?? NaN;
                     const currentEma = emaVals[emaVals.length - 1] ?? NaN;
                     position.lastHealthUpdatePrice = currentPrice;
                     position.lastHealthUpdateAt = Date.now();
                     const healthChannel = await client_1.discordClient.channels.fetch(position.channelId);
                     if (healthChannel?.isTextBased()) {
-                        await healthChannel.send((0, embeds_1.buildPositionHealthEmbed)(position, currentPrice, currentRsi, currentEma));
+                        await healthChannel.send((0, embeds_1.buildPositionHealthEmbed)(position, currentPrice, currentRsi, currentEma, timeTriggered && !priceTriggered ? 'TIME' : 'PRICE'));
                     }
                 }
                 catch (healthErr) {
                     logger_1.logger.warn(`Health update failed for position ${position.id}:`, healthErr);
                 }
             }
-            const update = (0, signalManager_1.updateDynamicSLTP)(position, candles5m, currentPrice);
+            // ── Regime-flip gate ─────────────────────────────────────────────────
+            // If the 4H regime has changed since entry, TP extensions are paused.
+            // SL trailing still runs (capital protection), but we stop pushing TP
+            // further when the market structure that justified this trade is gone.
+            const cachedRegime = (0, regimeDetector_1.getLastRegimes)().get(asset);
+            const regimeFlipped = cachedRegime !== undefined && cachedRegime.regime !== position.signal.regime;
+            if (regimeFlipped) {
+                logger_1.logger.warn(`${asset} regime flipped ${position.signal.regime} → ${cachedRegime.regime} ` +
+                    `— TP extensions paused for position ${position.id}`);
+            }
+            const update = (0, signalManager_1.updateDynamicSLTP)(position, candles5m, currentPrice, !regimeFlipped);
             if (!update)
                 continue;
             const channel = await client_1.discordClient.channels.fetch(position.channelId);
@@ -160,9 +184,12 @@ async function monitorActivePositions() {
             if (update.oldTP !== update.newTP) {
                 await tc.send((0, embeds_1.buildTPUpdateEmbed)(position, update.oldTP, update.newTP, currentPrice));
             }
-            // ── TP proximity: try to extend before alerting ──────────────────────
+            // ── TP proximity: momentum check at 1% out (was 0.3%) ──────────────
+            // Firing at 1% gives the momentum evaluation meaningful lead time
+            // rather than checking only when price is already at the doorstep.
+            // Skipped entirely if the regime has flipped.
             const tpDist = Math.abs(currentPrice - update.newTP) / currentPrice;
-            if (tpDist < 0.003) {
+            if (tpDist < 0.010 && !regimeFlipped) {
                 const extension = (0, signalManager_1.attemptMomentumTPExtension)(position, candles5m, currentPrice);
                 if (extension) {
                     // Momentum is strong — push TP out and let it run
@@ -243,7 +270,8 @@ async function runScanCycle() {
             }
         }
         // Filter, rank, de-duplicate across strategies
-        const ranked = (0, votingEngine_1.filterAndRankSignals)(newSignals, config_1.config.trading.minScoreThreshold);
+        // Uses the runtime threshold (set via /filter) or falls back to config default.
+        const ranked = (0, votingEngine_1.filterAndRankSignals)(newSignals, (0, adaptation_1.getMinScoreThreshold)());
         const deduped = (0, votingEngine_1.deduplicateSignals)(ranked);
         logger_1.logger.info(`Scan complete: ${newSignals.length} raw → ${ranked.length} ranked → ${deduped.length} posted`);
         let postedCount = 0;

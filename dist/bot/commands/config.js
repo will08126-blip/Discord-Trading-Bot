@@ -4,10 +4,15 @@ exports.data = void 0;
 exports.execute = execute;
 const discord_js_1 = require("discord.js");
 const config_1 = require("../../config");
+const adaptation_1 = require("../../adaptation/adaptation");
 exports.data = new discord_js_1.SlashCommandBuilder()
     .setName('config')
     .setDescription('Show current bot configuration settings');
 async function execute(interaction) {
+    const activeThreshold = (0, adaptation_1.getMinScoreThreshold)();
+    const filterMode = activeThreshold >= 75 ? '🔒 Strict (ELITE only)'
+        : activeThreshold >= 60 ? '⚖️ Normal (STRONG + ELITE)'
+            : '🔓 Relaxed (MEDIUM + STRONG + ELITE)';
     const embed = new discord_js_1.EmbedBuilder()
         .setColor(0x5865f2)
         .setTitle('⚙️ Bot Configuration')
@@ -19,7 +24,7 @@ async function execute(interaction) {
         name: '🔁 Scan Engine',
         value: [
             `Scan interval: **${config_1.config.engine.scanIntervalMinutes} min**`,
-            `Min score threshold: **${config_1.config.trading.minScoreThreshold}**`,
+            `Signal filter: **${filterMode}**  (score ≥ ${activeThreshold})  — change with \`/filter\``,
         ].join('\n'),
         inline: false,
     }, {
@@ -27,7 +32,6 @@ async function execute(interaction) {
         value: [
             `Max open positions: **${config_1.config.trading.maxOpenPositions}**`,
             `Daily loss limit: **$${config_1.config.trading.maxDailyLoss}**`,
-            `Risk per trade: ELITE 2% | STRONG 1.5% | MEDIUM 1%`,
         ].join('\n'),
         inline: false,
     }, {

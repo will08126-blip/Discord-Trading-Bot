@@ -3,12 +3,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.RECOMMENDED_WEIGHTS = void 0;
 exports.loadState = loadState;
 exports.saveState = saveState;
 exports.onTradeClosed = onTradeClosed;
 exports.checkHardControls = checkHardControls;
 exports.toggleBot = toggleBot;
 exports.getStrategyWeight = getStrategyWeight;
+exports.getMinScoreThreshold = getMinScoreThreshold;
+exports.setMinScoreThreshold = setMinScoreThreshold;
+exports.resetStrategyWeights = resetStrategyWeights;
+exports.setStrategyWeight = setStrategyWeight;
 const fs_1 = __importDefault(require("fs"));
 const config_1 = require("../config");
 const tracker_1 = require("../performance/tracker");
@@ -19,11 +24,33 @@ const STRATEGY_NAMES = [
     'Liquidity Sweep',
     'Volatility Expansion',
 ];
+/**
+ * How far the adaptation system can reduce each strategy's weight.
+ * Reflects user preferences: Liquidity Sweep/Breakout/Trend are high priority;
+ * Volatility Expansion is a bonus signal (user didn't select it as a priority).
+ */
+const STRATEGY_WEIGHT_FLOOR = {
+    'Trend Pullback': 0.75,
+    'Breakout Retest': 0.75,
+    'Liquidity Sweep': 0.80,
+    'Volatility Expansion': 0.50,
+};
+/**
+ * Recommended starting weights — used on reset and as the DEFAULT_STATE.
+ * Trend Pullback / Breakout Retest / Liquidity Sweep are equal at 1.0 (all user-preferred).
+ * Volatility Expansion starts at 0.85 — valid signal but lower user priority.
+ */
+exports.RECOMMENDED_WEIGHTS = {
+    'Trend Pullback': 1.0,
+    'Breakout Retest': 1.0,
+    'Liquidity Sweep': 1.0,
+    'Volatility Expansion': 0.85,
+};
 const DEFAULT_STATE = {
     enabled: config_1.config.engine.enabled,
     dailyLoss: 0,
     dailyLossDate: '',
-    strategyWeights: Object.fromEntries(STRATEGY_NAMES.map((n) => [n, 1.0])),
+    strategyWeights: { ...exports.RECOMMENDED_WEIGHTS },
 };
 // ─── State persistence ────────────────────────────────────────────────────────
 function ensureDataDir() {
@@ -65,8 +92,9 @@ function onTradeClosed(_trade) {
     for (const name of STRATEGY_NAMES) {
         const wr = (0, tracker_1.strategyWinRate)(name, 10);
         if (wr < 0.40) {
-            // Underperforming — reduce weight gradually
-            state.strategyWeights[name] = Math.max(0.5, (state.strategyWeights[name] ?? 1.0) * 0.90);
+            // Underperforming — reduce weight gradually, but never below the user-preference floor
+            const floor = STRATEGY_WEIGHT_FLOOR[name] ?? 0.50;
+            state.strategyWeights[name] = Math.max(floor, (state.strategyWeights[name] ?? 1.0) * 0.90);
             logger_1.logger.info(`Strategy "${name}" WR=${(wr * 100).toFixed(0)}% — weight → ${state.strategyWeights[name].toFixed(2)}`);
         }
         else if (wr >= 0.55) {
@@ -119,5 +147,44 @@ function toggleBot(enabled) {
 function getStrategyWeight(strategyName) {
     const state = loadState();
     return state.strategyWeights[strategyName] ?? 1.0;
+}
+/** Get the active minimum score threshold (runtime override or config default). */
+function getMinScoreThreshold() {
+    const state = loadState();
+    return state.minScoreThreshold ?? config_1.config.trading.minScoreThreshold;
+}
+/** Persist a new minimum score threshold that survives restarts. */
+function setMinScoreThreshold(threshold) {
+    const state = loadState();
+    state.minScoreThreshold = threshold;
+    saveState(state);
+    logger_1.logger.info(`Signal filter threshold set to ${threshold}`);
+    return state;
+}
+/**
+ * Reset all strategy weights to the recommended starting point.
+ * Use this when historical weight data is stale or tainted (e.g. after changing TP logic).
+ */
+function resetStrategyWeights() {
+    const state = loadState();
+    state.strategyWeights = { ...exports.RECOMMENDED_WEIGHTS };
+    saveState(state);
+    logger_1.logger.info('Strategy weights reset to recommended defaults');
+    return state;
+}
+/**
+ * Manually override a single strategy's weight (0.50–1.0).
+ * The adaptation system will continue adjusting from this new baseline.
+ */
+function setStrategyWeight(strategyName, weight) {
+    if (!STRATEGY_NAMES.includes(strategyName)) {
+        throw new Error(`Unknown strategy: ${strategyName}`);
+    }
+    const clamped = Math.max(0.50, Math.min(1.0, weight));
+    const state = loadState();
+    state.strategyWeights[strategyName] = clamped;
+    saveState(state);
+    logger_1.logger.info(`Strategy "${strategyName}" weight manually set to ${clamped.toFixed(2)}`);
+    return state;
 }
 //# sourceMappingURL=adaptation.js.map

@@ -38,7 +38,7 @@ export interface SLTPUpdate {
     hitTP: boolean;
     currentPrice: number;
 }
-export declare function updateDynamicSLTP(position: ActivePosition, candles5m: OHLCV[], currentPrice: number): SLTPUpdate | null;
+export declare function updateDynamicSLTP(position: ActivePosition, candles5m: OHLCV[], currentPrice: number, allowExtension?: boolean): SLTPUpdate | null;
 /**
  * Automatically close a position when SL or TP is hit.
  * Called by the engine after updateDynamicSLTP.
@@ -63,7 +63,7 @@ export declare function evaluateMomentumForExtension(candles: OHLCV[], direction
  * Returns { oldTP, newTP } on success, null if extension was skipped
  * (limit reached, momentum weak, or ATR unavailable).
  *
- * Hard cap: 2 momentum extensions per position.
+ * Hard cap: 5 total extensions per position (shared with milestone auto-extensions).
  */
 export declare function attemptMomentumTPExtension(position: ActivePosition, candles: OHLCV[], currentPrice: number): {
     oldTP: number;

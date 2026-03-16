@@ -9,7 +9,7 @@ const ccxt = require('ccxt');
 const cache_1 = require("./cache");
 const config_1 = require("../config");
 const logger_1 = require("../utils/logger");
-const TIMEFRAMES = ['4h', '15m', '5m', '1m'];
+const TIMEFRAMES = ['4h', '15m', '5m'];
 const CANDLE_LIMIT = 200; // enough for all indicators
 // Spot exchanges only — no geo-restricted futures endpoints.
 // All three support BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, PEPE/USDT with no API key.
@@ -84,13 +84,12 @@ async function fetchOHLCV(asset, timeframe, limit = CANDLE_LIMIT) {
     return candles;
 }
 async function fetchMultiTimeframe(asset) {
-    const [tf4h, tf15m, tf5m, tf1m] = await Promise.all(TIMEFRAMES.map((tf) => fetchOHLCV(asset, tf)));
+    const [tf4h, tf15m, tf5m] = await Promise.all(TIMEFRAMES.map((tf) => fetchOHLCV(asset, tf)));
     return {
         asset,
         '4h': tf4h,
         '15m': tf15m,
         '5m': tf5m,
-        '1m': tf1m,
     };
 }
 /** Fetch current mid-price without going through OHLCV */

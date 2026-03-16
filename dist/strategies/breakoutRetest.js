@@ -4,6 +4,7 @@ exports.BreakoutRetestStrategy = void 0;
 const uuid_1 = require("uuid");
 const base_1 = require("./base");
 const indicators_1 = require("../indicators/indicators");
+const cache_1 = require("../indicators/cache");
 /**
  * Breakout Retest Strategy (improved)
  *
@@ -25,28 +26,28 @@ class BreakoutRetestStrategy extends base_1.BaseStrategy {
     analyze(data, regime) {
         if (!this.isRegimeSupported(regime))
             return null;
+        const candles4h = data['4h'];
         const candles15m = data['15m'];
         const candles5m = data['5m'];
-        if (candles15m.length < 50 || candles5m.length < 20)
+        if (candles4h.length < 14 || candles15m.length < 50 || candles5m.length < 20)
             return null;
-        const atrVals15m = (0, indicators_1.atr)(candles15m, 14);
-        const avgAtr15m = (0, indicators_1.atrAverage)(atrVals15m, 14);
-        const lastAtr15m = atrVals15m[candles15m.length - 1];
-        const atrVals5m = (0, indicators_1.atr)(candles5m, 14);
-        const lastAtr5m = atrVals5m[candles5m.length - 1];
-        const avgAtr5m = (0, indicators_1.atrAverage)(atrVals5m, 14);
+        const lastAtr4h = (0, cache_1.cachedAtr)(candles4h, 14)[candles4h.length - 1];
+        const lastAtr15m = (0, cache_1.cachedAtr)(candles15m, 14)[candles15m.length - 1];
+        const avgAtr15m = (0, cache_1.cachedAtrAverage)(candles15m, 14);
+        const lastAtr5m = (0, cache_1.cachedAtr)(candles5m, 14)[candles5m.length - 1];
+        const avgAtr5m = (0, cache_1.cachedAtrAverage)(candles5m, 14);
         // ── Identify key levels from 15m swing points ─────────────────────────
         const swings = (0, indicators_1.swingPoints)(candles15m.slice(-50), 3, 3, 20);
         if (swings.length < 2)
             return null;
         // ── Find retest signal ────────────────────────────────────────────────
-        const signal = this.findRetestSignal(candles15m, candles5m, swings.map((s) => s.price), lastAtr15m, lastAtr5m, avgAtr5m, regime);
+        const signal = this.findRetestSignal(candles15m, candles5m, swings.map((s) => s.price), lastAtr15m, lastAtr5m, avgAtr5m, lastAtr4h, regime);
         return signal;
     }
-    findRetestSignal(candles15m, candles5m, levels, lastAtr15m, lastAtr5m, avgAtr5m, regime) {
+    findRetestSignal(candles15m, candles5m, levels, lastAtr15m, lastAtr5m, avgAtr5m, lastAtr4h, regime) {
         const lastClose5m = candles5m[candles5m.length - 1].close;
         // Pre-compute RSI and volume average on 5m for retest confirmation
-        const rsiVals5m = (0, indicators_1.rsi)(candles5m, 14);
+        const rsiVals5m = (0, cache_1.cachedRsi)(candles5m, 14);
         const currentRsi5m = rsiVals5m[rsiVals5m.length - 1] ?? 50;
         const avgVol5m = candles5m.slice(-20).reduce((s, c) => s + c.volume, 0) / 20;
         for (const level of levels) {
@@ -57,8 +58,11 @@ class BreakoutRetestStrategy extends base_1.BaseStrategy {
             const isLongBreak = breakCandle.close > level;
             const isShortBreak = breakCandle.close < level;
             // ── Step 2: Price is currently retesting the level on 5m ──────────────
-            // Tightened to 0.2% (was 0.3%) to reduce false retests
-            const tolerance = level * 0.002;
+            // Tolerance adapts to current volatility: at least 0.1% of price OR
+            // half an ATR, whichever is larger. In VOL_EXPANSION, ATR is wide so
+            // tolerance widens (prevents missing valid retests). In compression,
+            // the 0.1% floor keeps it tight.
+            const tolerance = Math.max(level * 0.001, avgAtr5m * 0.5);
             const isRetesting = Math.abs(lastClose5m - level) <= tolerance;
             if (!isRetesting)
                 continue;
@@ -96,17 +100,18 @@ class BreakoutRetestStrategy extends base_1.BaseStrategy {
             const stopDistance = Math.abs(entryMid - stopLoss);
             if (stopDistance === 0)
                 continue; // degenerate case
-            // TP: 3.0:1 R:R — confirmed breakout retests can trend strongly
-            const takeProfit = isLong
-                ? entryMid + stopDistance * 3.0
-                : entryMid - stopDistance * 3.0;
+            // TP: trade-type-aware R:R target (classify first so multiplier matches holding horizon).
+            const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
+            const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+            const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
+            const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
             const entryLow = isLong ? level - lastAtr5m * 0.1 : entryMid - lastAtr5m * 0.2;
             const entryHigh = isLong ? entryMid + lastAtr5m * 0.1 : level + lastAtr5m * 0.1;
             // ── Scoring ────────────────────────────────────────────────────────
             const components = this.zeroComponents();
             // HTF alignment: EMA direction on 15m
-            const ema20 = (0, indicators_1.ema)(candles15m, 20);
-            const ema50 = (0, indicators_1.ema)(candles15m, 50);
+            const ema20 = (0, cache_1.cachedEma)(candles15m, 20);
+            const ema50 = (0, cache_1.cachedEma)(candles15m, 50);
             const n = candles15m.length - 1;
             const htfAligned = (isLong && ema20[n] > ema50[n]) || (!isLong && ema20[n] < ema50[n]);
             components.htfAlignment = htfAligned ? 18 : 8;
@@ -146,8 +151,6 @@ class BreakoutRetestStrategy extends base_1.BaseStrategy {
             const tier = score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
             if (tier === 'NO_TRADE')
                 continue;
-            const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-            const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
             // Asia session gate: avoid tight stops in low-liquidity hours
             if (tradeType === 'SCALP' && (0, indicators_1.sessionQualityScore)() <= 2)
                 continue;

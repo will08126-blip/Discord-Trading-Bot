@@ -28,10 +28,10 @@ export declare const config: {
         readonly staleThresholds: Record<string, number>;
     };
     readonly paths: {
-        readonly data: string;
-        readonly tradesFile: string;
-        readonly stateFile: string;
-        readonly logsDir: string;
+        readonly data: any;
+        readonly tradesFile: any;
+        readonly stateFile: any;
+        readonly logsDir: any;
     };
     readonly leverageTiers: Record<string, Record<string, number>>;
     readonly scoreTiers: {

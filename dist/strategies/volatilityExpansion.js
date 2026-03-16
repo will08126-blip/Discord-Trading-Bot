@@ -4,6 +4,7 @@ exports.VolatilityExpansionStrategy = void 0;
 const uuid_1 = require("uuid");
 const base_1 = require("./base");
 const indicators_1 = require("../indicators/indicators");
+const cache_1 = require("../indicators/cache");
 /**
  * Volatility Expansion Strategy
  *
@@ -48,14 +49,12 @@ class VolatilityExpansionStrategy extends base_1.BaseStrategy {
         if (!breakUp && !breakDown)
             return null;
         // ── ATR must be expanding ─────────────────────────────────────────────
-        const atrVals15m = (0, indicators_1.atr)(candles15m, 14);
-        const lastAtr15m = atrVals15m[n15];
-        const avgAtr15m = (0, indicators_1.atrAverage)(atrVals15m, 14);
-        if (lastAtr15m <= avgAtr15m * 0.9)
-            return null; // not expanding yet
-        const atrVals5m = (0, indicators_1.atr)(candles5m, 14);
-        const lastAtr5m = atrVals5m[candles5m.length - 1];
-        const avgAtr5m = (0, indicators_1.atrAverage)(atrVals5m, 14);
+        const lastAtr15m = (0, cache_1.cachedAtr)(candles15m, 14)[n15];
+        const avgAtr15m = (0, cache_1.cachedAtrAverage)(candles15m, 14);
+        if (lastAtr15m <= avgAtr15m * 1.1)
+            return null; // must be genuinely expanding (>10% above avg)
+        const lastAtr5m = (0, cache_1.cachedAtr)(candles5m, 14)[candles5m.length - 1];
+        const avgAtr5m = (0, cache_1.cachedAtrAverage)(candles5m, 14);
         // ── Direction: 4h trend from last 10 candles ────────────────────────
         const last10_4h = candles4h.slice(-10);
         const trendPrice = last10_4h[last10_4h.length - 1].close - last10_4h[0].close;
@@ -78,10 +77,11 @@ class VolatilityExpansionStrategy extends base_1.BaseStrategy {
             ? lowerBand15m - lastAtr15m * 0.5
             : upperBand15m + lastAtr15m * 0.5;
         const stopDistance = Math.abs(entryMid - stopLoss);
-        // TP: 3.5:1 R:R — expansion moves carry the most momentum and run furthest
-        const takeProfit = isLong
-            ? entryMid + stopDistance * 3.5
-            : entryMid - stopDistance * 3.5;
+        // TP: trade-type-aware R:R target (classify first so multiplier matches holding horizon).
+        const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
+        const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+        const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
+        const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
         const entryZone = [
             entryMid - lastAtr5m * 0.15,
             entryMid + lastAtr5m * 0.15,
@@ -89,8 +89,8 @@ class VolatilityExpansionStrategy extends base_1.BaseStrategy {
         // ── Scoring ───────────────────────────────────────────────────────────
         const components = this.zeroComponents();
         // HTF alignment via 4h EMA
-        const ema20_4h = (0, indicators_1.ema)(candles4h, 20);
-        const ema50_4h = (0, indicators_1.ema)(candles4h, 50);
+        const ema20_4h = (0, cache_1.cachedEma)(candles4h, 20);
+        const ema50_4h = (0, cache_1.cachedEma)(candles4h, 50);
         const htfAligned = (isLong && ema20_4h[n4h] > ema50_4h[n4h]) ||
             (!isLong && ema20_4h[n4h] < ema50_4h[n4h]);
         components.htfAlignment = htfAligned ? 18 : 10;
@@ -116,8 +116,6 @@ class VolatilityExpansionStrategy extends base_1.BaseStrategy {
         const tier = score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
         if (tier === 'NO_TRADE')
             return null;
-        const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-        const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
         // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
         if (tradeType === 'SCALP' && (0, indicators_1.sessionQualityScore)() <= 2)
             return null;

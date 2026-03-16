@@ -4,6 +4,7 @@ exports.TrendPullbackStrategy = void 0;
 const uuid_1 = require("uuid");
 const base_1 = require("./base");
 const indicators_1 = require("../indicators/indicators");
+const cache_1 = require("../indicators/cache");
 /**
  * Trend Pullback Strategy
  *
@@ -27,9 +28,9 @@ class TrendPullbackStrategy extends base_1.BaseStrategy {
         if (candles4h.length < 50 || candles15m.length < 30 || candles5m.length < 20)
             return null;
         // ── 4H: EMA alignment ────────────────────────────────────────────────────
-        const ema20_4h = (0, indicators_1.ema)(candles4h, 20);
-        const ema50_4h = (0, indicators_1.ema)(candles4h, 50);
-        const ema200_4h = (0, indicators_1.ema)(candles4h, 200);
+        const ema20_4h = (0, cache_1.cachedEma)(candles4h, 20);
+        const ema50_4h = (0, cache_1.cachedEma)(candles4h, 50);
+        const ema200_4h = (0, cache_1.cachedEma)(candles4h, 200);
         const n4h = candles4h.length - 1;
         const htfUpAligned = ema20_4h[n4h] > ema50_4h[n4h] && ema50_4h[n4h] > ema200_4h[n4h];
         const htfDownAligned = ema20_4h[n4h] < ema50_4h[n4h] && ema50_4h[n4h] < ema200_4h[n4h];
@@ -37,8 +38,8 @@ class TrendPullbackStrategy extends base_1.BaseStrategy {
         if (!htfAligned)
             return null;
         // ── 15M: RSI pullback + price near EMA20 ─────────────────────────────────
-        const ema20_15m = (0, indicators_1.ema)(candles15m, 20);
-        const rsi_15m = (0, indicators_1.rsi)(candles15m, 14);
+        const ema20_15m = (0, cache_1.cachedEma)(candles15m, 20);
+        const rsi_15m = (0, cache_1.cachedRsi)(candles15m, 14);
         const n15 = candles15m.length - 1;
         const lastClose15 = candles15m[n15].close;
         const lastEma20_15 = ema20_15m[n15];
@@ -50,14 +51,13 @@ class TrendPullbackStrategy extends base_1.BaseStrategy {
         if (!rsiPulledBack || !priceNearEma)
             return null;
         // ── 5M: Entry confirmation ─────────────────────────────────────────────
-        const ema20_5m = (0, indicators_1.ema)(candles5m, 20);
+        const ema20_5m = (0, cache_1.cachedEma)(candles5m, 20);
         const n5 = candles5m.length - 1;
         const lastCandle5m = candles5m[n5];
         const prevCandle5m = candles5m[n5 - 1];
         const lastEma20_5m = ema20_5m[n5];
-        const atrVals5m = (0, indicators_1.atr)(candles5m, 14);
-        const lastAtr5m = atrVals5m[n5];
-        const avgAtr5m = (0, indicators_1.atrAverage)(atrVals5m, 14);
+        const lastAtr5m = (0, cache_1.cachedAtr)(candles5m, 14)[n5];
+        const avgAtr5m = (0, cache_1.cachedAtrAverage)(candles5m, 14);
         const confirmBull = (0, indicators_1.isBullishEngulfing)(candles5m.slice(-2)) ||
             (0, indicators_1.isBullishPin)(lastCandle5m);
         const confirmBear = (0, indicators_1.isBearishEngulfing)(candles5m.slice(-2)) ||
@@ -85,11 +85,16 @@ class TrendPullbackStrategy extends base_1.BaseStrategy {
         const stopLoss = isLong
             ? swingLow - lastAtr5m * 1.0
             : swingHigh + lastAtr5m * 1.0;
+        // TP: trade-type-aware R:R target.
+        // Classify trade type first so the TP reflects the realistic holding horizon.
+        //   SCALP  (SL < 0.3%):  4:1 R:R — very tight, quick exit
+        //   HYBRID (SL 0.3-1.5%): 3:1 R:R — moderate; holds hours to a day
+        //   SWING  (SL > 1.5%):  2.5:1 R:R — wider room, targets key structural level
         const stopDistance = Math.abs(entryMid - stopLoss);
-        // TP: 3.0:1 R:R — gives room for trend to extend
-        const takeProfit = isLong
-            ? entryMid + stopDistance * 3.0
-            : entryMid - stopDistance * 3.0;
+        const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
+        const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
+        const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
+        const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
         // ── Scoring ───────────────────────────────────────────────────────────────
         const components = this.zeroComponents();
         // HTF alignment (0-20)
@@ -121,8 +126,6 @@ class TrendPullbackStrategy extends base_1.BaseStrategy {
         const tier = score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
         if (tier === 'NO_TRADE')
             return null;
-        const stopPct = Math.abs(entryMid - stopLoss) / entryMid;
-        const tradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
         // Asia session gate: scalp trades have tight stops — avoid low-liquidity hours
         if (tradeType === 'SCALP' && (0, indicators_1.sessionQualityScore)() <= 2)
             return null;

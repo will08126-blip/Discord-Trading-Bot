@@ -52,12 +52,18 @@ const checkCmd = __importStar(require("./check"));
 const watchlistCmd = __importStar(require("./watchlist"));
 const liveCmd = __importStar(require("./live"));
 const tradeStatusCmd = __importStar(require("./tradeStatus"));
+const filterCmd = __importStar(require("./filter"));
+const weightsCmd = __importStar(require("./weights"));
+const pulseCmd = __importStar(require("./pulse"));
 // Singular alias — same execute handler, different SlashCommandBuilder (different name)
 const positionAliasCmd = {
     data: positionsCmd.dataAlias,
     execute: positionsCmd.execute,
 };
 exports.commands = new Map([
+    ['pulse', pulseCmd],
+    ['filter', filterCmd],
+    ['weights', weightsCmd],
     ['status', statusCmd],
     ['positions', positionsCmd],
     ['position', positionAliasCmd], // singular alias so both /position and /positions work
