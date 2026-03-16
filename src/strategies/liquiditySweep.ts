@@ -15,6 +15,10 @@ import {
 } from '../indicators/indicators';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
+// Number of 4H ATR lengths projected forward for the macro TP target.
+// At ~$4 ATR for SOL@$88, this produces a ~$144 TP (matches the user's chart-based targets).
+const TP_ATR4H_MULTIPLIER = 14;
+
 /**
  * Liquidity Sweep Reversal Strategy
  *
@@ -32,10 +36,14 @@ export class LiquiditySweepStrategy extends BaseStrategy {
   analyze(data: MultiTimeframeData, regime: Regime): StrategySignal | null {
     if (!this.isRegimeSupported(regime)) return null;
 
+    const candles4h = data['4h'];
     const candles15m = data['15m'];
     const candles5m = data['5m'];
 
-    if (candles15m.length < 30 || candles5m.length < 20) return null;
+    if (candles4h.length < 14 || candles15m.length < 30 || candles5m.length < 20) return null;
+
+    const atrVals4h = atr(candles4h, 14);
+    const lastAtr4h = atrVals4h[candles4h.length - 1];
 
     const atrVals15m = atr(candles15m, 14);
     const lastAtr15m = atrVals15m[candles15m.length - 1];
@@ -67,6 +75,7 @@ export class LiquiditySweepStrategy extends BaseStrategy {
       lastAtr15m,
       lastAtr5m,
       avgAtr5m,
+      lastAtr4h,
       true,
       regime
     );
@@ -81,6 +90,7 @@ export class LiquiditySweepStrategy extends BaseStrategy {
       lastAtr15m,
       lastAtr5m,
       avgAtr5m,
+      lastAtr4h,
       false,
       regime
     );
@@ -97,6 +107,7 @@ export class LiquiditySweepStrategy extends BaseStrategy {
     lastAtr15m: number,
     lastAtr5m: number,
     avgAtr5m: number,
+    lastAtr4h: number,
     isBullReversal: boolean,
     regime: Regime
   ): StrategySignal | null {
@@ -152,10 +163,11 @@ export class LiquiditySweepStrategy extends BaseStrategy {
           : c.high + lastAtr5m * 0.7;
 
         const stopDistance = Math.abs(entryMid - stopLoss);
-        // TP: 2.5:1 R:R — liquidity sweeps are reversals; more conservative than trend trades
-        const takeProfit = isBullReversal
-          ? entryMid + stopDistance * 2.5
-          : entryMid - stopDistance * 2.5;
+        // TP: macro target using 4H ATR — projects to major chart resistance/support.
+        // e.g. SOL@$87 with 4H ATR=$4 → TP=$143. Falls back to 2.5:1 R:R if 4H ATR unavailable.
+        const takeProfit = (lastAtr4h && !isNaN(lastAtr4h))
+          ? (isBullReversal ? entryMid + lastAtr4h * TP_ATR4H_MULTIPLIER : entryMid - lastAtr4h * TP_ATR4H_MULTIPLIER)
+          : (isBullReversal ? entryMid + stopDistance * 2.5 : entryMid - stopDistance * 2.5);
 
         const entryZone: [number, number] = isBullReversal
           ? [entryMid - lastAtr5m * 0.1, entryMid + lastAtr5m * 0.2]

@@ -11,6 +11,9 @@ import {
 } from '../indicators/indicators';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType, OHLCV } from '../types';
 
+// Number of 4H ATR lengths projected forward for the macro TP target.
+const TP_ATR4H_MULTIPLIER = 12;
+
 /**
  * Breakout Retest Strategy (improved)
  *
@@ -33,10 +36,14 @@ export class BreakoutRetestStrategy extends BaseStrategy {
   analyze(data: MultiTimeframeData, regime: Regime): StrategySignal | null {
     if (!this.isRegimeSupported(regime)) return null;
 
+    const candles4h = data['4h'];
     const candles15m = data['15m'];
     const candles5m = data['5m'];
 
-    if (candles15m.length < 50 || candles5m.length < 20) return null;
+    if (candles4h.length < 14 || candles15m.length < 50 || candles5m.length < 20) return null;
+
+    const atrVals4h = atr(candles4h, 14);
+    const lastAtr4h = atrVals4h[candles4h.length - 1];
 
     const atrVals15m = atr(candles15m, 14);
     const avgAtr15m = atrAverage(atrVals15m, 14);
@@ -58,6 +65,7 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       lastAtr15m,
       lastAtr5m,
       avgAtr5m,
+      lastAtr4h,
       regime
     );
 
@@ -71,6 +79,7 @@ export class BreakoutRetestStrategy extends BaseStrategy {
     lastAtr15m: number,
     lastAtr5m: number,
     avgAtr5m: number,
+    lastAtr4h: number,
     regime: Regime
   ): StrategySignal | null {
     const lastClose5m = candles5m[candles5m.length - 1].close;
@@ -137,10 +146,11 @@ export class BreakoutRetestStrategy extends BaseStrategy {
 
       if (stopDistance === 0) continue; // degenerate case
 
-      // TP: 3.0:1 R:R — confirmed breakout retests can trend strongly
-      const takeProfit = isLong
-        ? entryMid + stopDistance * 3.0
-        : entryMid - stopDistance * 3.0;
+      // TP: macro target using 4H ATR — projects to the next major chart level.
+      // Falls back to 3:1 R:R if 4H ATR unavailable.
+      const takeProfit = (lastAtr4h && !isNaN(lastAtr4h))
+        ? (isLong ? entryMid + lastAtr4h * TP_ATR4H_MULTIPLIER : entryMid - lastAtr4h * TP_ATR4H_MULTIPLIER)
+        : (isLong ? entryMid + stopDistance * 3.0 : entryMid - stopDistance * 3.0);
 
       const entryLow = isLong ? level - lastAtr5m * 0.1 : entryMid - lastAtr5m * 0.2;
       const entryHigh = isLong ? entryMid + lastAtr5m * 0.1 : level + lastAtr5m * 0.1;

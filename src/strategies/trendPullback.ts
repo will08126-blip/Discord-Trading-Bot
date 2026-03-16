@@ -12,6 +12,10 @@ import {
   isVolumeSpike,
   sessionQualityScore,
 } from '../indicators/indicators';
+
+// Number of 4H ATR lengths projected forward for the macro TP target.
+// At ~$4 ATR for SOL@$88, this produces a ~$144 TP (matches the user's chart-based targets).
+const TP_ATR4H_MULTIPLIER = 16;
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 /**
@@ -113,12 +117,14 @@ export class TrendPullbackStrategy extends BaseStrategy {
       ? swingLow - lastAtr5m * 1.0
       : swingHigh + lastAtr5m * 1.0;
 
+    // TP: macro target based on 4H ATR — projects to major chart resistance levels.
+    // e.g. SOL@$88 with 4H ATR=$4 → TP=$152. Falls back to 3:1 R:R if 4H ATR is bad.
+    const atrVals4h = atr(candles4h, 14);
+    const lastAtr4h = atrVals4h[n4h];
     const stopDistance = Math.abs(entryMid - stopLoss);
-
-    // TP: 3.0:1 R:R — gives room for trend to extend
-    const takeProfit = isLong
-      ? entryMid + stopDistance * 3.0
-      : entryMid - stopDistance * 3.0;
+    const takeProfit = (lastAtr4h && !isNaN(lastAtr4h))
+      ? (isLong ? entryMid + lastAtr4h * TP_ATR4H_MULTIPLIER : entryMid - lastAtr4h * TP_ATR4H_MULTIPLIER)
+      : (isLong ? entryMid + stopDistance * 3.0 : entryMid - stopDistance * 3.0);
 
     // ── Scoring ───────────────────────────────────────────────────────────────
     const components = this.zeroComponents();

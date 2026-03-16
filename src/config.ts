@@ -34,18 +34,19 @@ export const config = {
     maxOpenPositions: Number(optionalEnv('MAX_OPEN_POSITIONS', '3')),
     maxDailyLoss: Number(optionalEnv('MAX_DAILY_LOSS', '150')),
     minScoreThreshold: Number(optionalEnv('MIN_SCORE_THRESHOLD', '60')),
-    // Hard leverage caps per trade type
-    maxLeverageScalp:  Number(optionalEnv('MAX_LEVERAGE_SCALP',  '50')),
-    maxLeverageHybrid: Number(optionalEnv('MAX_LEVERAGE_HYBRID', '30')),
-    maxLeverageSwing:  Number(optionalEnv('MAX_LEVERAGE_SWING',  '20')),
+    // Hard leverage caps per trade type — increased to match high-conviction style
+    // where tight stops (0.3-0.5% for HYBRID) justify significant leverage.
+    maxLeverageScalp:  Number(optionalEnv('MAX_LEVERAGE_SCALP',  '75')),
+    maxLeverageHybrid: Number(optionalEnv('MAX_LEVERAGE_HYBRID', '50')),
+    maxLeverageSwing:  Number(optionalEnv('MAX_LEVERAGE_SWING',  '25')),
 
     // Leverage-adjusted profit targets (fraction, e.g. 0.5 = 50% return on capital).
-    // With 25x leverage a 2% price move = 50% capital return, 4% move = 100% return.
     //   earlyProfitAlertPct  – alert threshold; fires without closing the position
-    //   targetReturnPct      – sets the actual TP price on each confirmed position
-    // Set to 0 to disable the respective feature.
+    //   targetReturnPct      – DISABLED (0): strategies now use 4H ATR-based TP targets
+    //                          that project to real chart resistance/support levels.
+    //                          Set to >0 via env var to re-enable the leverage-formula override.
     earlyProfitAlertPct: Number(optionalEnv('EARLY_PROFIT_ALERT_PCT', '0.25')),
-    targetReturnPct:     Number(optionalEnv('TARGET_RETURN_PCT',      '1.0')),
+    targetReturnPct:     Number(optionalEnv('TARGET_RETURN_PCT',      '0')),
   },
 
   engine: {
@@ -71,13 +72,13 @@ export const config = {
   },
 
   // Leverage tiers by score tier per trade type
-  // Scalp:  SL < 0.3%  — tight stop justifies high leverage
-  // Hybrid: SL 0.3-1.5% — blended approach, medium leverage
-  // Swing:  SL > 1.5%  — wide stop, lower leverage
+  // Scalp:  SL < 0.3%  — tight stop justifies aggressive leverage
+  // Hybrid: SL 0.3-1.5% — blended; high conviction setups warrant higher leverage
+  // Swing:  SL > 1.5%  — wide stop, moderate leverage
   leverageTiers: {
-    scalp:  { ELITE: 50, STRONG: 30, MEDIUM: 15, NO_TRADE: 0 },
-    hybrid: { ELITE: 30, STRONG: 20, MEDIUM: 10, NO_TRADE: 0 },
-    swing:  { ELITE: 20, STRONG: 10, MEDIUM: 5,  NO_TRADE: 0 },
+    scalp:  { ELITE: 75, STRONG: 50, MEDIUM: 20, NO_TRADE: 0 },
+    hybrid: { ELITE: 50, STRONG: 35, MEDIUM: 15, NO_TRADE: 0 },
+    swing:  { ELITE: 25, STRONG: 15, MEDIUM: 7,  NO_TRADE: 0 },
   } as Record<string, Record<string, number>>,
 
   // Score tier boundaries
