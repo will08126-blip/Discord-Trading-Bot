@@ -253,7 +253,7 @@ export function buildCheckSummaryEmbed(result: SingleAssetScanResult) {
     return (
       `**${name}** — ${dirEmoji(s.direction)} ${s.direction}  |  ` +
       `Score: **${s.score}/100** ${tierEmoji(s.tier)}  |  ` +
-      `Lev: **${risk.suggestedLeverage}x**  |  Risk: **${risk.riskPct}%**`
+      `Lev: **${risk.suggestedLeverage}x**  |  Deploy: **${risk.deploymentScore}/100**`
     );
   });
 
@@ -292,7 +292,7 @@ export function buildWatchlistEmbed(results: SingleAssetScanResult[], isLive = f
       return (
         `**${assetLabel}** ${dirEmoji(s.direction)} ${s.direction}  |  ` +
         `Score: **${s.score}** ${tierEmoji(s.tier)}  |  ` +
-        `Lev: **${risk.suggestedLeverage}x**  |  Risk: **${risk.riskPct}%**  ` +
+        `Lev: **${risk.suggestedLeverage}x**  |  Deploy: **${risk.deploymentScore}/100**  ` +
         `*(${s.strategy})*`
       );
     }).join('\n');
@@ -368,8 +368,71 @@ export function buildEarlyProfitAlertEmbed(
 }
 
 // ─── Position health update embed ─────────────────────────────────────────────
-// Posted when price moves ≥1.5% from the last update, giving the user a quick
-// verdict on whether the trade is still healthy.
+// Posted every 15 min or when price moves ≥1% — shows live confidence meter,
+// P&L, and a verdict on whether the trade setup is still intact.
+
+/**
+ * Live confidence score (0-100) based on current indicators.
+ * Unlike the deployment score (which is fixed at signal time), this recalculates
+ * every health check so the meter reflects what the trade looks like RIGHT NOW.
+ *
+ *   EMA9 alignment  (0-35) — is price still on the right side of short-term trend?
+ *   RSI health       (0-30) — not overextended or collapsing
+ *   P&L direction    (0-20) — positive momentum adds confidence
+ *   Time in window   (0-15) — still within expected hold duration for this trade type
+ */
+function calcLiveConfidence(
+  position: ActivePosition,
+  currentPrice: number,
+  rsi14: number,
+  ema9: number
+): number {
+  const isLong = position.signal.direction === 'LONG';
+  let score = 0;
+
+  // EMA alignment
+  if (!isNaN(ema9)) {
+    const aligned = isLong ? currentPrice > ema9 : currentPrice < ema9;
+    score += aligned ? 35 : 0;
+  } else {
+    score += 17;
+  }
+
+  // RSI
+  if (!isNaN(rsi14)) {
+    const overextended = isLong ? rsi14 > 75 : rsi14 < 25;
+    const healthy = isLong ? (rsi14 >= 45 && rsi14 <= 70) : (rsi14 >= 30 && rsi14 <= 55);
+    score += overextended ? 5 : healthy ? 30 : 15;
+  } else {
+    score += 15;
+  }
+
+  // P&L direction
+  const pnlPct = isLong
+    ? (currentPrice - position.entryPrice) / position.entryPrice
+    : (position.entryPrice - currentPrice) / position.entryPrice;
+  score += pnlPct > 0.01 ? 20 : pnlPct > 0 ? 12 : pnlPct > -0.005 ? 5 : 0;
+
+  // Time in expected window
+  const hoursElapsed = (Date.now() - position.confirmedAt) / (1000 * 60 * 60);
+  const expectedHours = position.signal.tradeType === 'SCALP' ? 3
+    : position.signal.tradeType === 'HYBRID' ? 16 : 48;
+  score += hoursElapsed <= expectedHours ? 15 : hoursElapsed <= expectedHours * 1.5 ? 7 : 0;
+
+  return Math.min(100, Math.max(0, score));
+}
+
+function buildLiveConfidenceMeter(score: number): string {
+  const filled = Math.round(score / 10);
+  const dot = score >= 70 ? '🟢' : score >= 45 ? '🟡' : '🔴';
+  const dots = dot.repeat(filled) + '⚪'.repeat(10 - filled);
+  const label =
+    score >= 80 ? 'Setup intact — holding strong' :
+    score >= 60 ? 'Stable — conditions still favorable' :
+    score >= 40 ? 'Softening — setup weakening, watch closely' :
+                  'Breaking down — consider early exit';
+  return `${dots}  ${score}/100\n${label}`;
+}
 
 export function buildPositionHealthEmbed(
   position: ActivePosition,
@@ -389,6 +452,9 @@ export function buildPositionHealthEmbed(
   const stopDist = Math.abs(entry - position.currentStopLoss) / entry;
   const rMultiple = stopDist > 0 ? pnlPct / stopDist : 0;
   const capitalReturn = pnlPct * position.suggestedLeverage;
+
+  // Live confidence meter (recalculated from current indicators)
+  const liveScore = calcLiveConfidence(position, currentPrice, rsi14, ema9);
 
   // Price vs EMA — most reliable trend-intact signal
   const priceAboveEma = currentPrice > ema9;
@@ -427,6 +493,11 @@ export function buildPositionHealthEmbed(
     .setDescription(verdict)
     .addFields(
       {
+        name: '📡 Live Confidence',
+        value: buildLiveConfidenceMeter(liveScore),
+        inline: false,
+      },
+      {
         name: '💰 Live P&L',
         value: [
           `Price:   **${formatPrice(currentPrice, asset)}**  (entry: ${formatPrice(entry, asset)})`,
@@ -440,7 +511,7 @@ export function buildPositionHealthEmbed(
         value: [
           emaStatus,
           `RSI(14): ${isNaN(rsi14) ? 'N/A' : rsi14.toFixed(1)}  ${rsiTag}`,
-          `SL: ${formatPrice(position.currentStopLoss, asset)}  |  TP: ${formatPrice(position.currentTakeProfit, asset)}`,
+          `TP: ${formatPrice(position.currentTakeProfit, asset)}`,
         ].join('\n'),
         inline: false,
       }
