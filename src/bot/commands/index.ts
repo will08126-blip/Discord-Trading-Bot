@@ -18,6 +18,7 @@ import * as liveCmd from './live';
 import * as tradeStatusCmd from './tradeStatus';
 import * as filterCmd from './filter';
 import * as weightsCmd from './weights';
+import * as pulseCmd from './pulse';
 
 export interface Command {
   data: { toJSON: () => unknown; name: string };
@@ -31,6 +32,7 @@ const positionAliasCmd: Command = {
 };
 
 export const commands = new Map<string, Command>([
+  ['pulse', pulseCmd],
   ['filter', filterCmd],
   ['weights', weightsCmd],
   ['status', statusCmd],
