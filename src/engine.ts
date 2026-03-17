@@ -20,6 +20,7 @@ import {
   updateDynamicSLTP,
   handleSLTPHit,
   attemptMomentumTPExtension,
+  hasActiveOrPendingPosition,
 } from './signals/signalManager';
 import { checkHardControls, getStrategyWeight, getMinScoreThreshold } from './adaptation/adaptation';
 import {
@@ -399,6 +400,10 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
     let postedCount = 0;
     for (const signal of deduped) {
       try {
+        if (hasActiveOrPendingPosition(signal.asset)) {
+          logger.info(`Skipping signal for ${signal.asset} ${signal.direction} — already have active/pending position`);
+          continue;
+        }
         await postSignal(signal);
         postedCount++;
       } catch (err) {
