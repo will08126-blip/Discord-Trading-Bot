@@ -386,18 +386,3 @@ export function markSignalSent(signal: StrategySignal): void {
   const key = `${signal.asset}:${signal.direction}:${signal.strategy}`;
   recentlySentAssets.set(key, Date.now());
 }
-
-/**
- * Returns true if there is already an active position or a pending (unconfirmed)
- * signal for the given symbol. Used to suppress new signals that conflict with
- * existing exposure on the same asset.
- */
-export function hasActiveOrPendingPosition(symbol: string): boolean {
-  for (const pos of activePositions.values()) {
-    if (pos.signal.asset === symbol) return true;
-  }
-  for (const sig of pendingSignals.values()) {
-    if (sig.asset === symbol) return true;
-  }
-  return false;
-}
