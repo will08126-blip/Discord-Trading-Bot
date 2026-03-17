@@ -15,8 +15,16 @@ const COMMAND_SECTIONS = [
         desc: 'See all open trades with entry, stop loss, take profit, and leverage. Each position has a 🔴 **Close** button — click it to close the trade instantly.',
       },
       {
-        name: '/close [id] <price>',
-        desc: 'Fallback command if buttons are unavailable. Leave the ID blank if only one trade is open. Use the 🔴 **Close Position** button on any tracking message for the easiest experience.',
+        name: '/close <price> [id]',
+        desc: 'Fallback command if buttons are unavailable. Provide the exit price; leave the ID blank if only one trade is open. Use the 🔴 **Close Position** button on any tracking message for the easiest experience.',
+      },
+      {
+        name: '/trade-status [id]',
+        desc: 'Live letter grade (S / A+ / A / B / C / D / F) for your open trade(s) based on R-multiple, progress to TP, RSI momentum, and time in trade. Omit the ID to grade all open positions.',
+      },
+      {
+        name: '/pulse',
+        desc: 'Force an immediate health check on all open positions right now — no need to wait for the automatic 15-minute cycle. Resets the health-check timer.',
       },
     ],
   },
@@ -68,6 +76,14 @@ const COMMAND_SECTIONS = [
       {
         name: '/toggle <on|off>',
         desc: 'Enable or disable signal scanning. When off, no new signals are posted until you re-enable.',
+      },
+      {
+        name: '/filter <strict|normal|relaxed>',
+        desc: 'Adjust the signal quality threshold. **strict** = score ≥ 75 (ELITE only, fewest signals). **normal** = score ≥ 60 (default). **relaxed** = score ≥ 45 (most signals, lower conviction).',
+      },
+      {
+        name: '/weights <view|reset|set>',
+        desc: 'Manage per-strategy signal weights. **view** — see current weights. **reset** — restore recommended defaults. **set strategy:<name> value:<0.5–1.0>** — manually pin a strategy weight.',
       },
       {
         name: '/config',

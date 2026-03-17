@@ -61,11 +61,26 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
   // ── Start ─────────────────────────────────────────────────────────────────
   if (liveDashboard) {
-    await interaction.reply({
-      content: 'A live dashboard is already running. Use `/live stop` first.',
-      ephemeral: true,
-    });
-    return;
+    // Verify the tracked message still exists — it may have been deleted in Discord
+    let messageStillExists = true;
+    try {
+      await liveDashboard.message.fetch();
+    } catch {
+      messageStillExists = false;
+    }
+
+    if (messageStillExists) {
+      await interaction.reply({
+        content: 'A live dashboard is already running. Use `/live stop` first.',
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // Message was deleted — clean up stale state and allow a new dashboard to start
+    clearInterval(liveDashboard.timer);
+    liveDashboard = null;
+    logger.warn('Live dashboard message was deleted externally — resetting state');
   }
 
   await interaction.deferReply();
