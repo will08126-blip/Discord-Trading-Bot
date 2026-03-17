@@ -113,7 +113,13 @@ export async function fetchMultiTimeframe(asset: Asset): Promise<MultiTimeframeD
 /** Fetch current mid-price without going through OHLCV */
 export async function fetchCurrentPrice(asset: Asset): Promise<number> {
   const ticker = await withFallback<any>((ex) => ex.fetchTicker(asset));
-  return ticker.last ?? ticker.close ?? 0;
+  // Prefer last traded price; fall back to candle close, then bid/ask mid-point
+  const mid = (ticker.bid != null && ticker.ask != null) ? (ticker.bid + ticker.ask) / 2 : undefined;
+  const price = ticker.last ?? ticker.close ?? mid;
+  if (!price || price <= 0) {
+    throw new Error(`Could not determine current price for ${asset} — ticker fields all null/zero`);
+  }
+  return price;
 }
 
 /** Fetch all assets in parallel */

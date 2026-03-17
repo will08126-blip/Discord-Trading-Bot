@@ -17,7 +17,7 @@ const recentlySentAssets = new Map<string, number>();        // for duplicate su
 
 const POSITIONS_FILE = path.join(config.paths.data, 'positions.json');
 
-function savePositions(): void {
+export function savePositions(): void {
   try {
     fs.mkdirSync(path.dirname(POSITIONS_FILE), { recursive: true });
     const tmp = POSITIONS_FILE + '.tmp';
