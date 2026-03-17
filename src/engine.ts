@@ -31,7 +31,8 @@ import {
   buildPositionHealthEmbed,
 } from './bot/embeds';
 import { generateDailySummary } from './llm/summaries';
-import { cachedRsi, cachedEma } from './indicators/cache';
+import { cachedRsi, cachedEma, cachedVwap } from './indicators/cache';
+import { volumeAverage } from './indicators/indicators';
 import { config } from './config';
 import { logger } from './utils/logger';
 import type { Asset, MultiTimeframeData, RegimeResult, StrategySignal } from './types';
@@ -143,8 +144,9 @@ async function monitorActivePositions() {
   for (const position of positions) {
     try {
       const asset = position.signal.asset as Asset;
-      const [candles5m, currentPrice] = await Promise.all([
+      const [candles5m, candles15m, currentPrice] = await Promise.all([
         fetchOHLCV(asset, '5m'),
+        fetchOHLCV(asset, '15m'),
         fetchCurrentPrice(asset),
       ]);
 
@@ -198,13 +200,31 @@ async function monitorActivePositions() {
 
       if (timeTriggered || priceTriggered) {
         try {
-          const rsiVals = cachedRsi(candles5m, 14);
-          const emaVals = cachedEma(candles5m, 9);
-          const currentRsi = rsiVals[rsiVals.length - 1] ?? NaN;
-          const currentEma = emaVals[emaVals.length - 1] ?? NaN;
+          const rsiVals5m  = cachedRsi(candles5m, 14);
+          const ema9Vals   = cachedEma(candles5m, 9);
+          const vwapVals   = cachedVwap(candles5m);
+          const rsi14      = rsiVals5m[rsiVals5m.length - 1] ?? NaN;
+          const ema9       = ema9Vals[ema9Vals.length - 1] ?? NaN;
+          const vwap       = vwapVals[vwapVals.length - 1] ?? NaN;
 
-          // Skip health embed if indicators are both unavailable — embed would show misleading data
-          if (isNaN(currentRsi) && isNaN(currentEma)) {
+          // RSI slope: compare current RSI to 3 bars ago
+          const rsiPrev3   = rsiVals5m[rsiVals5m.length - 4] ?? NaN;
+          const rsiSlope: 'rising' | 'flat' | 'falling' =
+            !isNaN(rsi14) && !isNaN(rsiPrev3)
+              ? rsi14 - rsiPrev3 > 2 ? 'rising' : rsiPrev3 - rsi14 > 2 ? 'falling' : 'flat'
+              : 'flat';
+
+          // Volume ratio
+          const avgVol     = volumeAverage(candles5m, 20);
+          const lastVol    = candles5m[candles5m.length - 1]?.volume ?? 0;
+          const volumeRatio = avgVol > 0 ? lastVol / avgVol : undefined;
+
+          // 15m EMA(21)
+          const ema21Vals15m = cachedEma(candles15m, 21);
+          const ema21_15m    = ema21Vals15m[ema21Vals15m.length - 1] ?? NaN;
+
+          // Skip health embed if core 5m indicators are both unavailable
+          if (isNaN(rsi14) && isNaN(ema9)) {
             logger.warn(`Health check skipped for ${asset} — insufficient candle data for indicators`);
           } else {
             position.lastHealthUpdatePrice = currentPrice;
@@ -213,7 +233,8 @@ async function monitorActivePositions() {
             const healthChannel = await discordClient.channels.fetch(position.channelId).catch(() => null);
             if (healthChannel?.isTextBased()) {
               await (healthChannel as TextChannel).send(
-                buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma,
+                buildPositionHealthEmbed(position, currentPrice,
+                  { rsi14, ema9, rsiSlope, ema21_15m, vwap, volumeRatio },
                   timeTriggered && !priceTriggered ? 'TIME' : 'PRICE')
               );
             } else {

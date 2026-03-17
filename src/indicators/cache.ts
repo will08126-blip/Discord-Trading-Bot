@@ -9,7 +9,7 @@
  * Usage — swap `ema(candles, 20)` for `cachedEma(candles, 20)` etc.
  */
 import type { OHLCV } from '../types';
-import { ema, rsi, atr, atrAverage } from './indicators';
+import { ema, rsi, atr, atrAverage, vwap } from './indicators';
 
 const store = new WeakMap<OHLCV[], Map<string, unknown>>();
 
@@ -38,3 +38,6 @@ export const cachedAtr = (candles: OHLCV[], period: number): number[] =>
  */
 export const cachedAtrAverage = (candles: OHLCV[], period: number): number =>
   get(candles, `atrAvg_${period}`, () => atrAverage(cachedAtr(candles, period), period));
+
+export const cachedVwap = (candles: OHLCV[]): number[] =>
+  get(candles, 'vwap', () => vwap(candles));
