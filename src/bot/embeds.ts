@@ -371,53 +371,91 @@ export function buildEarlyProfitAlertEmbed(
 // Posted every 15 min or when price moves ≥1% — shows live confidence meter,
 // P&L, and a verdict on whether the trade setup is still intact.
 
+/** Rich indicator bag passed to the health embed. All fields beyond rsi14/ema9 are optional
+ *  so the automated engine health checks (which don't fetch 15m) still work. */
+export interface PositionHealthIndicators {
+  rsi14: number;               // 5m RSI(14)
+  ema9: number;                // 5m EMA(9)
+  rsiSlope?: 'rising' | 'flat' | 'falling'; // RSI trend over last 3 bars
+  ema21_15m?: number;          // 15m EMA(21) — medium-term trend context
+  vwap?: number;               // 5m session VWAP
+  volumeRatio?: number;        // last bar volume / 20-bar avg (1.0 = average)
+}
+
 /**
  * Live confidence score (0-100) based on current indicators.
- * Unlike the deployment score (which is fixed at signal time), this recalculates
- * every health check so the meter reflects what the trade looks like RIGHT NOW.
  *
- *   EMA9 alignment  (0-35) — is price still on the right side of short-term trend?
- *   RSI health       (0-30) — not overextended or collapsing
- *   P&L direction    (0-20) — positive momentum adds confidence
- *   Time in window   (0-15) — still within expected hold duration for this trade type
+ *   EMA(9) 5m alignment   (0-25) — short-term trend, gradient not binary
+ *   RSI(14) 5m + slope    (0-25) — momentum health and direction
+ *   EMA(21) 15m alignment (0-20) — medium-term trend context
+ *   VWAP position         (0-15) — intraday buying/selling pressure
+ *   R-multiple / P&L      (0-15) — how far in profit vs risk taken
  */
 function calcLiveConfidence(
   position: ActivePosition,
   currentPrice: number,
-  rsi14: number,
-  ema9: number
+  ind: PositionHealthIndicators
 ): number {
   const isLong = position.signal.direction === 'LONG';
   let score = 0;
 
-  // EMA alignment
-  if (!isNaN(ema9)) {
-    const aligned = isLong ? currentPrice > ema9 : currentPrice < ema9;
-    score += aligned ? 35 : 0;
+  // 1. EMA(9) 5m — gradient based on distance from EMA (0-25)
+  if (!isNaN(ind.ema9)) {
+    const pctDiff = (currentPrice - ind.ema9) / ind.ema9;
+    const aligned = isLong ? pctDiff > 0 : pctDiff < 0;
+    const strong  = Math.abs(pctDiff) > 0.003; // >0.3% away from EMA
+    score += aligned && strong ? 25 : aligned ? 15 : 0;
   } else {
-    score += 17;
+    score += 12; // neutral fallback
   }
 
-  // RSI
-  if (!isNaN(rsi14)) {
-    const overextended = isLong ? rsi14 > 75 : rsi14 < 25;
-    const healthy = isLong ? (rsi14 >= 45 && rsi14 <= 70) : (rsi14 >= 30 && rsi14 <= 55);
-    score += overextended ? 5 : healthy ? 30 : 15;
+  // 2. RSI(14) 5m value + slope (0-25)
+  if (!isNaN(ind.rsi14)) {
+    let rsiScore = 0;
+    if (isLong) {
+      if      (ind.rsi14 >= 50 && ind.rsi14 <= 70) rsiScore = 20; // ideal long momentum
+      else if (ind.rsi14 >= 40 && ind.rsi14 <  50) rsiScore = 12; // softening
+      else if (ind.rsi14 >= 30 && ind.rsi14 <  40) rsiScore = 5;  // weak
+      else if (ind.rsi14 >  70)                     rsiScore = 10; // overbought but running
+      else                                          rsiScore = 0;  // <30 collapsing
+    } else {
+      if      (ind.rsi14 >= 30 && ind.rsi14 <= 50) rsiScore = 20; // ideal short momentum
+      else if (ind.rsi14 >  50 && ind.rsi14 <= 60) rsiScore = 12; // softening
+      else if (ind.rsi14 >  60 && ind.rsi14 <= 70) rsiScore = 5;  // weak
+      else if (ind.rsi14 <  30)                     rsiScore = 10; // oversold but running
+      else                                          rsiScore = 0;  // >70 collapsing
+    }
+    // Slope bonus/penalty: +4 if RSI moving with trade, -3 if moving against
+    if (ind.rsiSlope === 'rising')  rsiScore += isLong  ?  4 : -3;
+    if (ind.rsiSlope === 'falling') rsiScore += isLong  ? -3 :  4;
+    score += Math.min(25, Math.max(0, rsiScore));
   } else {
-    score += 15;
+    score += 12;
   }
 
-  // P&L direction
+  // 3. EMA(21) 15m — medium-term trend context (0-20)
+  if (ind.ema21_15m !== undefined && !isNaN(ind.ema21_15m)) {
+    const aligned = isLong ? currentPrice > ind.ema21_15m : currentPrice < ind.ema21_15m;
+    score += aligned ? 20 : 0;
+  } else {
+    score += 10; // neutral when not fetched
+  }
+
+  // 4. VWAP position (0-15)
+  if (ind.vwap !== undefined && !isNaN(ind.vwap)) {
+    const favourable = isLong ? currentPrice > ind.vwap : currentPrice < ind.vwap;
+    score += favourable ? 15 : 0;
+  } else {
+    score += 7; // neutral when not fetched
+  }
+
+  // 5. R-multiple (how many R in profit vs stop distance) (0-15)
   const pnlPct = isLong
     ? (currentPrice - position.entryPrice) / position.entryPrice
     : (position.entryPrice - currentPrice) / position.entryPrice;
-  score += pnlPct > 0.01 ? 20 : pnlPct > 0 ? 12 : pnlPct > -0.005 ? 5 : 0;
-
-  // Time in expected window
-  const hoursElapsed = (Date.now() - position.confirmedAt) / (1000 * 60 * 60);
-  const expectedHours = position.signal.tradeType === 'SCALP' ? 3
-    : position.signal.tradeType === 'HYBRID' ? 16 : 48;
-  score += hoursElapsed <= expectedHours ? 15 : hoursElapsed <= expectedHours * 1.5 ? 7 : 0;
+  const stopDist = Math.abs(position.entryPrice - position.signal.stopLoss) / position.entryPrice;
+  const rMult = stopDist > 0 ? pnlPct / stopDist : 0;
+  score += rMult >= 1 ? 15 : rMult >= 0.5 ? 12 : rMult >= 0 ? 8 : rMult >= -0.5 ? 3 : 0;
 
   return Math.min(100, Math.max(0, score));
 }
@@ -437,13 +475,13 @@ function buildLiveConfidenceMeter(score: number): string {
 export function buildPositionHealthEmbed(
   position: ActivePosition,
   currentPrice: number,
-  rsi14: number,    // current RSI(14) value on 5m candles
-  ema9: number,     // current EMA(9) value on 5m candles
+  indicators: PositionHealthIndicators,
   trigger: 'TIME' | 'PRICE' | 'PULSE' = 'PRICE'
 ) {
   const asset = position.signal.asset.split('/')[0];
   const isLong = position.signal.direction === 'LONG';
   const entry = position.entryPrice;
+  const { rsi14, ema9, rsiSlope, ema21_15m, vwap, volumeRatio } = indicators;
 
   // Live P&L from entry
   const pnlPct = isLong
@@ -453,38 +491,72 @@ export function buildPositionHealthEmbed(
   const rMultiple = stopDist > 0 ? pnlPct / stopDist : 0;
   const capitalReturn = pnlPct * position.suggestedLeverage;
 
-  // Live confidence meter (recalculated from current indicators)
-  const liveScore = calcLiveConfidence(position, currentPrice, rsi14, ema9);
+  // SL buffer remaining (how many R until stop is hit)
+  const slBufferR = stopDist > 0
+    ? Math.abs(currentPrice - position.currentStopLoss) / (stopDist * entry)
+    : null;
 
-  // Price vs EMA — most reliable trend-intact signal
-  const priceAboveEma = currentPrice > ema9;
-  const trendIntact = isLong ? priceAboveEma : !priceAboveEma;
-  const emaStatus = trendIntact
-    ? `✅ Price ${isLong ? 'above' : 'below'} EMA(9) — trend intact`
-    : `⚠️ Price ${isLong ? 'below' : 'above'} EMA(9) — momentum weakening`;
+  // Live confidence meter
+  const liveScore = calcLiveConfidence(position, currentPrice, indicators);
 
-  // RSI status
-  const rsiOverextended = isLong ? rsi14 > 75 : rsi14 < 25;
-  const rsiWeak = isLong ? rsi14 < 40 : rsi14 > 60;
-  const rsiTag = rsiOverextended ? '⚠️ Overextended' : rsiWeak ? '⚠️ Weakening' : '✅ Healthy';
-
-  // Overall verdict
+  // Verdict driven by score — consistent with the confidence meter
   let verdict: string;
   let color: number;
-  if (pnlPct > 0 && trendIntact && !rsiOverextended) {
+  if (liveScore >= 65) {
     verdict = '✅ **Still valid** — trade is healthy, hold your position.';
     color = 0x00cc44;
-  } else if (rMultiple < -0.5 || (!trendIntact && rsiWeak)) {
-    verdict = '🔴 **Consider exiting** — momentum has turned against this trade.';
-    color = 0xff2200;
-  } else {
+  } else if (liveScore >= 40) {
     verdict = '⚠️ **Watch closely** — conditions are mixed, be ready to act.';
     color = 0xff8800;
+  } else {
+    verdict = '🔴 **Consider exiting** — momentum has turned against this trade.';
+    color = 0xff2200;
   }
 
-  const pnlSign = pnlPct >= 0 ? '+' : '';
-  const capitalSign = capitalReturn >= 0 ? '+' : '';
+  // ── Technicals lines ────────────────────────────────────────────────────────
+  const slopeArrow = rsiSlope === 'rising' ? ' ↑' : rsiSlope === 'falling' ? ' ↓' : '';
+  const rsiOverextended = isLong ? rsi14 > 75 : rsi14 < 25;
+  const rsiWeak        = isLong ? rsi14 < 40  : rsi14 > 60;
+  const rsiTag = rsiOverextended ? '⚠️ Overextended' : rsiWeak ? '⚠️ Weakening' : '✅ Healthy';
 
+  const ema9Intact = isLong ? currentPrice > ema9 : currentPrice < ema9;
+  const ema9Line = !isNaN(ema9)
+    ? (ema9Intact
+        ? `✅ EMA(9) 5m — trend intact`
+        : `⚠️ EMA(9) 5m — momentum weakening`)
+    : '❔ EMA(9) 5m — N/A';
+
+  const ema21Line = ema21_15m !== undefined && !isNaN(ema21_15m)
+    ? (isLong ? currentPrice > ema21_15m : currentPrice < ema21_15m)
+        ? `✅ EMA(21) 15m — medium trend up`
+        : `⚠️ EMA(21) 15m — medium trend broken`
+    : null;
+
+  const vwapLine = vwap !== undefined && !isNaN(vwap)
+    ? (isLong ? currentPrice > vwap : currentPrice < vwap)
+        ? `✅ VWAP — price on favourable side`
+        : `⚠️ VWAP — price on adverse side`
+    : null;
+
+  const volLine = volumeRatio !== undefined
+    ? (volumeRatio >= 1.5 ? `🔊 Volume spike (${volumeRatio.toFixed(1)}x avg)` : null)
+    : null;
+
+  const slLine = slBufferR !== null
+    ? `SL buffer: **${slBufferR.toFixed(2)}R** remaining  |  TP: ${formatPrice(position.currentTakeProfit, asset)}`
+    : `TP: ${formatPrice(position.currentTakeProfit, asset)}`;
+
+  const techLines = [
+    ema9Line,
+    ema21Line,
+    vwapLine,
+    volLine,
+    `RSI(14): ${isNaN(rsi14) ? 'N/A' : rsi14.toFixed(1)}${slopeArrow}  ${rsiTag}`,
+    slLine,
+  ].filter(Boolean).join('\n');
+
+  const pnlSign     = pnlPct >= 0 ? '+' : '';
+  const capitalSign = capitalReturn >= 0 ? '+' : '';
   const triggerLabel = trigger === 'TIME' ? '⏰ 15-min check' : trigger === 'PULSE' ? '📡 /pulse check' : '📊 Price moved 1%+';
 
   const embed = new EmbedBuilder()
@@ -507,12 +579,8 @@ export function buildPositionHealthEmbed(
         inline: false,
       },
       {
-        name: '📈 Technicals (5m)',
-        value: [
-          emaStatus,
-          `RSI(14): ${isNaN(rsi14) ? 'N/A' : rsi14.toFixed(1)}  ${rsiTag}`,
-          `TP: ${formatPrice(position.currentTakeProfit, asset)}`,
-        ].join('\n'),
+        name: '📈 Technicals (5m | 15m)',
+        value: techLines,
         inline: false,
       }
     )
