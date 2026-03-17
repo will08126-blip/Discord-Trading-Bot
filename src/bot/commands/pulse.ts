@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
-import { getAllActivePositions } from '../../signals/signalManager';
+import { getAllActivePositions, savePositions } from '../../signals/signalManager';
 import { fetchOHLCV, fetchCurrentPrice } from '../../data/marketData';
 import { cachedRsi, cachedEma } from '../../indicators/cache';
 import { buildPositionHealthEmbed } from '../embeds';
@@ -45,8 +45,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       // Reset the 15-min timer so the next auto-check is 15 min from now
       position.lastHealthUpdatePrice = currentPrice;
       position.lastHealthUpdateAt = Date.now();
+      savePositions();
 
-      const payload = buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma, 'PRICE');
+      const payload = buildPositionHealthEmbed(position, currentPrice, currentRsi, currentEma, 'PULSE');
 
       if (!firstReplyDone) {
         // Replace the "Bot is thinking…" placeholder — keeps the message alive permanently
