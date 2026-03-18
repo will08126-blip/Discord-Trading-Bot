@@ -29,7 +29,10 @@ export const config = {
   },
 
   trading: {
-    assets: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'PEPE/USDT'] as const,
+    assets: [
+      'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'PEPE/USDT',
+      'XAU/USD',  'XAG/USD',  'QQQ/USD',  'SPY/USD',
+    ] as const,
     // No fixed capital — sizing is confidence-based (% of whatever you allocate)
     maxOpenPositions: Number(optionalEnv('MAX_OPEN_POSITIONS', '3')),
     maxDailyLoss: Number(optionalEnv('MAX_DAILY_LOSS', '150')),
@@ -87,6 +90,16 @@ export const config = {
     STRONG: 60,
     MEDIUM: 40,
   },
+
+  // Per-asset leverage caps — override trade-type tier maximums for lower-volatility instruments.
+  // Crypto leverage tiers (scalp: 75, hybrid: 50, swing: 25) are not appropriate for gold/silver
+  // or equity ETFs. These caps are applied on top of the normal tier calculation.
+  assetLeverageCap: {
+    'XAU/USD': 10,  // Gold: moderate leverage (wide ATR relative to % move)
+    'XAG/USD': 10,  // Silver: same as gold
+    'QQQ/USD': 5,   // Equity ETF: low leverage; not a crypto instrument
+    'SPY/USD': 5,   // Equity ETF: same as QQQ
+  } as Partial<Record<string, number>>,
 } as const;
 
 export type Config = typeof config;

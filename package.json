@@ -20,8 +20,9 @@
     "node-cron": "^3.0.3",
     "technicalindicators": "^3.1.0",
     "typescript": "^5.5.4",
+    "uuid": "^10.0.0",
     "winston": "^3.14.2",
-    "uuid": "^10.0.0"
+    "yahoo-finance2": "^3.13.2"
   },
   "devDependencies": {
     "ts-node": "^10.9.2"
