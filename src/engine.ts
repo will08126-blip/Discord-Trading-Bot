@@ -83,16 +83,18 @@ export interface SingleAssetScanResult {
 export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanResult> {
   try {
     const asset = symbol as Asset;
-    const [candles4h, candles15m, candles5m] = await Promise.all([
+    const [candles4h, candles15m, candles5m, candles1m] = await Promise.all([
       fetchOHLCV(asset, '4h', 200),
       fetchOHLCV(asset, '15m', 200),
       fetchOHLCV(asset, '5m', 200),
+      fetchOHLCV(asset, '1m', 200),
     ]);
     const mtfData: MultiTimeframeData = {
       asset,
       '4h': candles4h,
       '15m': candles15m,
       '5m': candles5m,
+      '1m': candles1m,
     };
     const regime = detectRegime(asset, candles4h);
     setLastRegime(asset, regime);

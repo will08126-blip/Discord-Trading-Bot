@@ -58,7 +58,9 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       lastAtr5m,
       avgAtr5m,
       lastAtr4h,
-      regime
+      regime,
+      candles4h,
+      data['1m']
     );
 
     return signal;
@@ -72,7 +74,9 @@ export class BreakoutRetestStrategy extends BaseStrategy {
     lastAtr5m: number,
     avgAtr5m: number,
     lastAtr4h: number,
-    regime: Regime
+    regime: Regime,
+    candles4h: OHLCV[],
+    candles1m?: OHLCV[]
   ): StrategySignal | null {
     const lastClose5m = candles5m[candles5m.length - 1].close;
 
@@ -131,12 +135,46 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       // How many times has this level been retested? (first retest is better)
       const retestCount = this.countRetests(candles15m, level, 0.002);
 
-      // SL: beyond the retest candle's wick + wider ATR buffer to absorb wick sweeps
-      const stopLoss = isLong
+      const entryMid = lastCandle5m.close;
+
+      // SL: try three modes — SCALP (1m) → SWING (4h) → HYBRID (5m wick default)
+      // HYBRID default: beyond the retest candle's wick + 0.8×ATR5m buffer
+      let stopLoss: number = isLong
         ? Math.min(lastCandle5m.low, prevCandle5m.low) - lastAtr5m * 0.8
         : Math.max(lastCandle5m.high, prevCandle5m.high) + lastAtr5m * 0.8;
+      let stopModeSet = false;
 
-      const entryMid = lastCandle5m.close;
+      // SCALP: stop behind 3-candle 1m swing + 0.2×ATR1m
+      if (!stopModeSet && candles1m && candles1m.length >= 5) {
+        const n1 = candles1m.length - 1;
+        const lastAtr1m = cachedAtr(candles1m, 14)[n1];
+        const lastCandle1m = candles1m[n1];
+        const recent1m = candles1m.slice(-3);
+        const scalp1mLow  = Math.min(...recent1m.map((c) => c.low));
+        const scalp1mHigh = Math.max(...recent1m.map((c) => c.high));
+        const scalpStop = isLong ? scalp1mLow - lastAtr1m * 0.2 : scalp1mHigh + lastAtr1m * 0.2;
+        const scalpPct  = Math.abs(entryMid - scalpStop) / entryMid;
+        const body1m    = Math.abs(lastCandle1m.close - lastCandle1m.open);
+        if (scalpPct < 0.003 && body1m > lastAtr1m * 0.3) {
+          stopLoss = scalpStop;
+          stopModeSet = true;
+        }
+      }
+
+      // SWING: stop behind 6-candle 4h structural swing + 0.3×ATR4h
+      if (!stopModeSet) {
+        const recent4h    = candles4h.slice(-6);
+        const swing4hLow  = Math.min(...recent4h.map((c) => c.low));
+        const swing4hHigh = Math.max(...recent4h.map((c) => c.high));
+        const swingStop = isLong ? swing4hLow - lastAtr4h * 0.3 : swing4hHigh + lastAtr4h * 0.3;
+        const swingPct  = Math.abs(entryMid - swingStop) / entryMid;
+        if (swingPct > 0.015 && swingPct < 0.05) {
+          stopLoss = swingStop;
+          stopModeSet = true;
+        }
+      }
+      // stopModeSet unused below — stopLoss is always a number from this point
+
       const stopDistance = Math.abs(entryMid - stopLoss);
 
       if (stopDistance === 0) continue; // degenerate case
@@ -224,7 +262,7 @@ export class BreakoutRetestStrategy extends BaseStrategy {
         tier,
         regime,
         timestamp: Date.now(),
-        notes: `Level=${level.toFixed(2)}, Retests=${retestCount}, ${tradeType}`,
+        notes: `Level=${level.toFixed(2)}, Retests=${retestCount}, SL=${(stopPct * 100).toFixed(2)}% [${tradeType}]`,
       };
     }
     return null;

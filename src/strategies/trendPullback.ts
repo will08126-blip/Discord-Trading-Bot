@@ -78,6 +78,7 @@ export class TrendPullbackStrategy extends BaseStrategy {
     const lastEma20_5m = ema20_5m[n5];
     const lastAtr5m = cachedAtr(candles5m, 14)[n5];
     const avgAtr5m = cachedAtrAverage(candles5m, 14);
+    const lastAtr4h = cachedAtr(candles4h, 14)[n4h];
 
     const confirmBull =
       isBullishEngulfing(candles5m.slice(-2)) ||
@@ -103,15 +104,45 @@ export class TrendPullbackStrategy extends BaseStrategy {
 
     const entryMid = (entryLow + entryHigh) / 2;
 
-    // SL: swing low/high of the last 5 candles + 0.5× ATR
-    const recentCandles = candles5m.slice(-5);
-    const swingLow = Math.min(...recentCandles.map((c) => c.low));
-    const swingHigh = Math.max(...recentCandles.map((c) => c.high));
+    // SL: try three modes — SCALP (1m) → SWING (4h) → HYBRID (5m default)
+    const candles1m = data['1m'];
+    // HYBRID default: 5m swing low/high of last 5 candles + 1.0×ATR5m
+    const hybridCandles = candles5m.slice(-5);
+    const hybridLow  = Math.min(...hybridCandles.map((c) => c.low));
+    const hybridHigh = Math.max(...hybridCandles.map((c) => c.high));
+    let stopLoss: number = isLong ? hybridLow - lastAtr5m * 1.0 : hybridHigh + lastAtr5m * 1.0;
+    let stopModeSet = false;
 
-    // SL: wider buffer (1.0×ATR) to avoid getting swept by normal wicks
-    const stopLoss = isLong
-      ? swingLow - lastAtr5m * 1.0
-      : swingHigh + lastAtr5m * 1.0;
+    // SCALP: stop behind 3-candle 1m swing + 0.2×ATR1m
+    if (!stopModeSet && candles1m && candles1m.length >= 5) {
+      const n1 = candles1m.length - 1;
+      const lastAtr1m = cachedAtr(candles1m, 14)[n1];
+      const lastCandle1m = candles1m[n1];
+      const recent1m = candles1m.slice(-3);
+      const scalp1mLow  = Math.min(...recent1m.map((c) => c.low));
+      const scalp1mHigh = Math.max(...recent1m.map((c) => c.high));
+      const scalpStop = isLong ? scalp1mLow - lastAtr1m * 0.2 : scalp1mHigh + lastAtr1m * 0.2;
+      const scalpPct  = Math.abs(entryMid - scalpStop) / entryMid;
+      const body1m    = Math.abs(lastCandle1m.close - lastCandle1m.open);
+      if (scalpPct < 0.003 && body1m > lastAtr1m * 0.3) {
+        stopLoss = scalpStop;
+        stopModeSet = true;
+      }
+    }
+
+    // SWING: stop behind 6-candle 4h structural swing + 0.3×ATR4h
+    if (!stopModeSet) {
+      const recent4h    = candles4h.slice(-6);
+      const swing4hLow  = Math.min(...recent4h.map((c) => c.low));
+      const swing4hHigh = Math.max(...recent4h.map((c) => c.high));
+      const swingStop = isLong ? swing4hLow - lastAtr4h * 0.3 : swing4hHigh + lastAtr4h * 0.3;
+      const swingPct  = Math.abs(entryMid - swingStop) / entryMid;
+      if (swingPct > 0.015 && swingPct < 0.05) {
+        stopLoss = swingStop;
+        stopModeSet = true;
+      }
+    }
+    // stopModeSet unused below — stopLoss is always a number from this point
 
     // TP: trade-type-aware R:R target.
     // Classify trade type first so the TP reflects the realistic holding horizon.
@@ -184,7 +215,7 @@ export class TrendPullbackStrategy extends BaseStrategy {
       tier,
       regime,
       timestamp: Date.now(),
-      notes: `RSI=${lastRsi15.toFixed(1)}, SL=${(stopPct*100).toFixed(2)}%, ${tradeType}`,
+      notes: `RSI=${lastRsi15.toFixed(1)}, SL=${(stopPct * 100).toFixed(2)}% [${tradeType}]`,
     };
   }
 }

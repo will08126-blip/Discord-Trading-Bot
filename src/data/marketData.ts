@@ -5,7 +5,7 @@ import { getCached, setCache } from './cache';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 
-const TIMEFRAMES: Timeframe[] = ['4h', '15m', '5m'];
+const TIMEFRAMES: Timeframe[] = ['4h', '15m', '5m', '1m'];
 const CANDLE_LIMIT = 200; // enough for all indicators
 
 // Spot exchanges only — no geo-restricted futures endpoints.
@@ -98,7 +98,7 @@ export async function fetchOHLCV(
 }
 
 export async function fetchMultiTimeframe(asset: Asset): Promise<MultiTimeframeData> {
-  const [tf4h, tf15m, tf5m] = await Promise.all(
+  const [tf4h, tf15m, tf5m, tf1m] = await Promise.all(
     TIMEFRAMES.map((tf) => fetchOHLCV(asset, tf))
   );
 
@@ -107,6 +107,7 @@ export async function fetchMultiTimeframe(asset: Asset): Promise<MultiTimeframeD
     '4h': tf4h,
     '15m': tf15m,
     '5m': tf5m,
+    '1m': tf1m,
   };
 }
 
