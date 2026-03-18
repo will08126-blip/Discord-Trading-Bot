@@ -25,7 +25,9 @@ export interface RiskParameters {
 const RISK_PCT: Record<string, Record<ScoreTier, number>> = {
   scalp:  { ELITE: 5.0, STRONG: 3.0, MEDIUM: 1.5, NO_TRADE: 0 },
   hybrid: { ELITE: 5.0, STRONG: 3.0, MEDIUM: 1.5, NO_TRADE: 0 },
-  swing:  { ELITE: 3.0, STRONG: 2.0, MEDIUM: 1.0, NO_TRADE: 0 },
+  // Swing trades use larger capital allocation (wide structural stop = lower leverage
+  // but larger notional position — e.g. 5% risk / 2% stop = 2.5× notional at 2.5× leverage).
+  swing:  { ELITE: 5.0, STRONG: 3.0, MEDIUM: 1.5, NO_TRADE: 0 },
 };
 
 function leverageCap(tier: ScoreTier, tradeType: TradeType): number {

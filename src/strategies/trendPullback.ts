@@ -9,6 +9,12 @@ import {
   sessionQualityScore,
 } from '../indicators/indicators';
 import { cachedEma, cachedRsi, cachedAtr, cachedAtrAverage } from '../indicators/cache';
+import {
+  findSwing4hStop,
+  findSwing4hTP,
+  swingRsiCheck,
+  swingEmaScore,
+} from './swingHelpers';
 
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
@@ -78,6 +84,7 @@ export class TrendPullbackStrategy extends BaseStrategy {
     const lastEma20_5m = ema20_5m[n5];
     const lastAtr5m = cachedAtr(candles5m, 14)[n5];
     const avgAtr5m = cachedAtrAverage(candles5m, 14);
+    const lastAtr4h = cachedAtr(candles4h, 14)[n4h];
 
     const confirmBull =
       isBullishEngulfing(candles5m.slice(-2)) ||
@@ -103,47 +110,98 @@ export class TrendPullbackStrategy extends BaseStrategy {
 
     const entryMid = (entryLow + entryHigh) / 2;
 
-    // SL: swing low/high of the last 5 candles + 0.5× ATR
-    const recentCandles = candles5m.slice(-5);
-    const swingLow = Math.min(...recentCandles.map((c) => c.low));
-    const swingHigh = Math.max(...recentCandles.map((c) => c.high));
+    // SL: try three modes — SCALP (1m) → SWING (4h) → HYBRID (5m default)
+    const candles1m = data['1m'];
+    // HYBRID default: 5m swing low/high of last 5 candles + 1.0×ATR5m
+    const hybridCandles = candles5m.slice(-5);
+    const hybridLow  = Math.min(...hybridCandles.map((c) => c.low));
+    const hybridHigh = Math.max(...hybridCandles.map((c) => c.high));
+    let stopLoss: number = isLong ? hybridLow - lastAtr5m * 1.0 : hybridHigh + lastAtr5m * 1.0;
+    let stopModeSet = false;
 
-    // SL: wider buffer (1.0×ATR) to avoid getting swept by normal wicks
-    const stopLoss = isLong
-      ? swingLow - lastAtr5m * 1.0
-      : swingHigh + lastAtr5m * 1.0;
+    // SCALP: stop behind 3-candle 1m swing + 0.2×ATR1m
+    if (!stopModeSet && candles1m && candles1m.length >= 5) {
+      const n1 = candles1m.length - 1;
+      const lastAtr1m = cachedAtr(candles1m, 14)[n1];
+      const lastCandle1m = candles1m[n1];
+      const recent1m = candles1m.slice(-3);
+      const scalp1mLow  = Math.min(...recent1m.map((c) => c.low));
+      const scalp1mHigh = Math.max(...recent1m.map((c) => c.high));
+      const scalpStop = isLong ? scalp1mLow - lastAtr1m * 0.2 : scalp1mHigh + lastAtr1m * 0.2;
+      const scalpPct  = Math.abs(entryMid - scalpStop) / entryMid;
+      const body1m    = Math.abs(lastCandle1m.close - lastCandle1m.open);
+      if (scalpPct < 0.003 && body1m > lastAtr1m * 0.3) {
+        stopLoss = scalpStop;
+        stopModeSet = true;
+      }
+    }
+
+    // SWING: structural 4h stop from real swing-point analysis (pro-grade placement)
+    if (!stopModeSet) {
+      const swingStop = findSwing4hStop(candles4h, entryMid, isLong, lastAtr4h);
+      if (swingStop !== null) {
+        const rsiGate = swingRsiCheck(candles4h, isLong);
+        if (rsiGate.favorable) {
+          stopLoss = swingStop;
+          stopModeSet = true;
+        }
+      }
+    }
+    // stopModeSet unused below — stopLoss is always a number from this point
 
     // TP: trade-type-aware R:R target.
-    // Classify trade type first so the TP reflects the realistic holding horizon.
-    //   SCALP  (SL < 0.3%):  4:1 R:R — very tight, quick exit
-    //   HYBRID (SL 0.3-1.5%): 3:1 R:R — moderate; holds hours to a day
-    //   SWING  (SL > 1.5%):  2.5:1 R:R — wider room, targets key structural level
+    //   SCALP  (SL < 0.3%):  4:1 R:R
+    //   HYBRID (SL 0.3-1.5%): 3:1 R:R
+    //   SWING  (SL > 1.5%):  structural 4h level or 2.5:1 R:R fallback
     const stopDistance = Math.abs(entryMid - stopLoss);
     const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
     const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
     const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
-    const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+    let takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+
+    // SWING: replace fixed R:R TP with next structural 4h swing level when available
+    if (tradeType === 'SWING') {
+      const structTP = findSwing4hTP(candles4h, entryMid, stopLoss, isLong);
+      if (structTP !== null) takeProfit = structTP;
+    }
 
     // ── Scoring ───────────────────────────────────────────────────────────────
     const components = this.zeroComponents();
 
     // HTF alignment (0-20)
-    const ema20Distance = Math.abs(ema20_4h[n4h] - ema50_4h[n4h]) / ema50_4h[n4h];
-    components.htfAlignment = Math.min(20, Math.round(10 + ema20Distance * 1000));
+    // SWING: use full 4h EMA structure analysis; SCALP/HYBRID: EMA spread proximity
+    if (tradeType === 'SWING') {
+      const emaInfo = swingEmaScore(candles4h, entryMid, isLong);
+      components.htfAlignment = emaInfo.htfScore;
+    } else {
+      const ema20Distance = Math.abs(ema20_4h[n4h] - ema50_4h[n4h]) / ema50_4h[n4h];
+      components.htfAlignment = Math.min(20, Math.round(10 + ema20Distance * 1000));
+    }
 
     // Setup quality (0-20): clean pullback depth
     const rsiFromExtreme = isLong
       ? Math.max(0, lastRsi15 - 30) / 30  // 30→60 → 0→1
       : Math.max(0, 70 - lastRsi15) / 30;
     components.setupQuality = Math.min(20, Math.round(rsiFromExtreme * 20));
+    // SWING bonus when entry is at 4h dynamic support (EMA20/EMA50)
+    if (tradeType === 'SWING') {
+      const emaInfo = swingEmaScore(candles4h, entryMid, isLong);
+      if (emaInfo.nearKeyEma) components.setupQuality = Math.min(20, components.setupQuality + 3);
+    }
 
     // Momentum: confirmation candle size vs ATR
     const bodySize = Math.abs(lastCandle5m.close - lastCandle5m.open);
     components.momentum = Math.min(15, Math.round((bodySize / avgAtr5m) * 10));
 
-    // Volatility quality (0-10): ATR not extreme
-    const atrRatio = lastAtr5m / avgAtr5m;
-    components.volatilityQuality = atrRatio < 2.0 ? Math.min(10, Math.round((2.0 - atrRatio) * 10)) : 0;
+    // Volatility quality (0-10)
+    // SWING: 4h RSI score reflects "room to run" on the higher timeframe
+    // SCALP/HYBRID: ATR ratio (not too volatile for the timeframe)
+    if (tradeType === 'SWING') {
+      components.volatilityQuality = swingRsiCheck(candles4h, isLong).rsiScore;
+    } else {
+      const atrRatio = lastAtr5m / avgAtr5m;
+      components.volatilityQuality = atrRatio < 2.0 ? Math.min(10, Math.round((2.0 - atrRatio) * 10)) : 0;
+    }
 
     // Regime fit: perfect match
     components.regimeFit = 10;
@@ -184,7 +242,7 @@ export class TrendPullbackStrategy extends BaseStrategy {
       tier,
       regime,
       timestamp: Date.now(),
-      notes: `RSI=${lastRsi15.toFixed(1)}, SL=${(stopPct*100).toFixed(2)}%, ${tradeType}`,
+      notes: `RSI15m=${lastRsi15.toFixed(1)}, SL=${(stopPct * 100).toFixed(2)}%${tradeType === 'SWING' ? ` RSI4h=${swingRsiCheck(candles4h, isLong).rsi4h.toFixed(0)}` : ''} [${tradeType}]`,
     };
   }
 }

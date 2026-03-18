@@ -6,6 +6,7 @@ import {
   sessionQualityScore,
 } from '../indicators/indicators';
 import { cachedAtr, cachedAtrAverage, cachedRsi, cachedEma } from '../indicators/cache';
+import { findSwing4hStop, findSwing4hTP, swingEmaScore } from './swingHelpers';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType, OHLCV } from '../types';
 
 
@@ -58,7 +59,9 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       lastAtr5m,
       avgAtr5m,
       lastAtr4h,
-      regime
+      regime,
+      candles4h,
+      data['1m']
     );
 
     return signal;
@@ -72,7 +75,9 @@ export class BreakoutRetestStrategy extends BaseStrategy {
     lastAtr5m: number,
     avgAtr5m: number,
     lastAtr4h: number,
-    regime: Regime
+    regime: Regime,
+    candles4h: OHLCV[],
+    candles1m?: OHLCV[]
   ): StrategySignal | null {
     const lastClose5m = candles5m[candles5m.length - 1].close;
 
@@ -131,21 +136,55 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       // How many times has this level been retested? (first retest is better)
       const retestCount = this.countRetests(candles15m, level, 0.002);
 
-      // SL: beyond the retest candle's wick + wider ATR buffer to absorb wick sweeps
-      const stopLoss = isLong
+      const entryMid = lastCandle5m.close;
+
+      // SL: try three modes — SCALP (1m) → SWING (4h) → HYBRID (5m wick default)
+      // HYBRID default: beyond the retest candle's wick + 0.8×ATR5m buffer
+      let stopLoss: number = isLong
         ? Math.min(lastCandle5m.low, prevCandle5m.low) - lastAtr5m * 0.8
         : Math.max(lastCandle5m.high, prevCandle5m.high) + lastAtr5m * 0.8;
+      let stopModeSet = false;
 
-      const entryMid = lastCandle5m.close;
+      // SCALP: stop behind 3-candle 1m swing + 0.2×ATR1m
+      if (!stopModeSet && candles1m && candles1m.length >= 5) {
+        const n1 = candles1m.length - 1;
+        const lastAtr1m = cachedAtr(candles1m, 14)[n1];
+        const lastCandle1m = candles1m[n1];
+        const recent1m = candles1m.slice(-3);
+        const scalp1mLow  = Math.min(...recent1m.map((c) => c.low));
+        const scalp1mHigh = Math.max(...recent1m.map((c) => c.high));
+        const scalpStop = isLong ? scalp1mLow - lastAtr1m * 0.2 : scalp1mHigh + lastAtr1m * 0.2;
+        const scalpPct  = Math.abs(entryMid - scalpStop) / entryMid;
+        const body1m    = Math.abs(lastCandle1m.close - lastCandle1m.open);
+        if (scalpPct < 0.003 && body1m > lastAtr1m * 0.3) {
+          stopLoss = scalpStop;
+          stopModeSet = true;
+        }
+      }
+
+      // SWING: structural 4h stop from real swing-point analysis (pro-grade placement)
+      if (!stopModeSet) {
+        const swingStop = findSwing4hStop(candles4h, entryMid, isLong, lastAtr4h);
+        if (swingStop !== null) {
+          stopLoss = swingStop;
+          stopModeSet = true;
+        }
+      }
+      // stopModeSet unused below — stopLoss is always a number from this point
+
       const stopDistance = Math.abs(entryMid - stopLoss);
 
       if (stopDistance === 0) continue; // degenerate case
 
-      // TP: trade-type-aware R:R target (classify first so multiplier matches holding horizon).
+      // TP: trade-type-aware R:R target; SWING upgrades to structural 4h level.
       const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
       const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
       const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
-      const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+      let takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+      if (tradeType === 'SWING') {
+        const structTP = findSwing4hTP(candles4h, entryMid, stopLoss, isLong);
+        if (structTP !== null) takeProfit = structTP;
+      }
 
       // Entry zone: symmetric 0.1× ATR buffer on both sides for both directions
       const entryLow = isLong ? level - lastAtr5m * 0.1 : entryMid - lastAtr5m * 0.1;
@@ -154,13 +193,17 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       // ── Scoring ────────────────────────────────────────────────────────
       const components = this.zeroComponents();
 
-      // HTF alignment: EMA direction on 15m
-      const ema20 = cachedEma(candles15m, 20);
-      const ema50 = cachedEma(candles15m, 50);
-      const n = candles15m.length - 1;
-      const htfAligned =
-        (isLong && ema20[n] > ema50[n]) || (!isLong && ema20[n] < ema50[n]);
-      components.htfAlignment = htfAligned ? 18 : 8;
+      // HTF alignment: SWING uses full 4h EMA structure; others use 15m EMA direction
+      if (tradeType === 'SWING') {
+        const emaInfo = swingEmaScore(candles4h, entryMid, isLong);
+        components.htfAlignment = emaInfo.htfScore;
+      } else {
+        const ema20 = cachedEma(candles15m, 20);
+        const ema50 = cachedEma(candles15m, 50);
+        const n = candles15m.length - 1;
+        const htfAligned = (isLong && ema20[n] > ema50[n]) || (!isLong && ema20[n] < ema50[n]);
+        components.htfAlignment = htfAligned ? 18 : 8;
+      }
 
       // Setup quality: first retest scores highest (most reliable)
       // 0 prior retests = fresh level, 1 = proven level, 2+ = overused
@@ -224,7 +267,7 @@ export class BreakoutRetestStrategy extends BaseStrategy {
         tier,
         regime,
         timestamp: Date.now(),
-        notes: `Level=${level.toFixed(2)}, Retests=${retestCount}, ${tradeType}`,
+        notes: `Level=${level.toFixed(2)}, Retests=${retestCount}, SL=${(stopPct * 100).toFixed(2)}% [${tradeType}]`,
       };
     }
     return null;
