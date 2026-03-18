@@ -29,6 +29,7 @@ import {
   buildClosedTradeEmbed,
   buildEarlyProfitAlertEmbed,
   buildPositionHealthEmbed,
+  buildWatchlistDipEmbed,
 } from './bot/embeds';
 import { generateDailySummary } from './llm/summaries';
 import { cachedRsi, cachedEma, cachedVwap } from './indicators/cache';
@@ -55,6 +56,28 @@ const strategies = [
   new LiquiditySweepStrategy(),
   new VolatilityExpansionStrategy(),
 ];
+
+// ─── Watchlist dip monitoring state ──────────────────────────────────────────
+
+// Only crypto assets are monitored for dips (non-crypto assets have different
+// volatility profiles and would generate excessive noise at these thresholds).
+const CRYPTO_WATCHLIST: Asset[] = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'PEPE/USDT'];
+
+// Alert at 3%, 5%, and 8% drops from the rolling high — each fires separately.
+const DIP_LEVELS = [0.03, 0.05, 0.08];
+
+// High-water marks: the recent peak price per asset, used as the drop baseline.
+// Resets upward whenever price makes a new high.
+const watchlistHighWaterMark = new Map<Asset, { price: number; timestamp: number }>();
+
+// Rate-limit: once an alert fires for a given asset+level, suppress re-alerts
+// for this duration so we don't spam on choppy price action.
+const DIP_ALERT_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+const watchlistDipAlertLog = new Map<string, number>(); // `${asset}:${level}` → last alert ts
+
+// SL proximity threshold: alert when price is within this % of the stop loss.
+const SL_APPROACH_PCT = 0.03; // 3% distance from SL
+const SL_APPROACH_COOLDOWN_MS = 15 * 60 * 1000; // re-alert at most every 15 min
 
 // ─── Last scan summary (read by /status) ─────────────────────────────────────
 
@@ -266,12 +289,39 @@ async function monitorActivePositions() {
         );
       }
 
+      // ── SL proximity alert (fires independently before SL is actually hit) ──
+      const slDist = Math.abs(currentPrice - position.currentStopLoss) / currentPrice;
+      const timeSinceSlAlert = Date.now() - (position.slProximityAlertAt ?? 0);
+      const isApproachingSL = position.signal.direction === 'LONG'
+        ? currentPrice > position.currentStopLoss   // still above SL but checking distance
+        : currentPrice < position.currentStopLoss;  // still below SL but checking distance
+      if (isApproachingSL && slDist < SL_APPROACH_PCT && timeSinceSlAlert > SL_APPROACH_COOLDOWN_MS) {
+        position.slProximityAlertAt = Date.now();
+        const slApproachChannel = await discordClient.channels.fetch(position.channelId).catch(() => null);
+        if (slApproachChannel?.isTextBased()) {
+          await (slApproachChannel as TextChannel).send(
+            buildExitAlertEmbed(position, 'SL_APPROACH', currentPrice)
+          );
+          logger.info(`SL approach alert sent for ${asset} — ${(slDist * 100).toFixed(2)}% from SL`);
+        }
+      }
+
       const update = updateDynamicSLTP(position, candles5m, currentPrice, !regimeFlipped);
       if (!update) continue;
 
       const channel = await discordClient.channels.fetch(position.channelId);
       if (!channel?.isTextBased()) continue;
       const tc = channel as TextChannel;
+
+      // ── SL hit ───────────────────────────────────────────────────────────
+      if (update.hitSL) {
+        await tc.send(buildExitAlertEmbed(position, 'SL_HIT', currentPrice));
+        const trade = handleSLTPHit(update);
+        if (trade) {
+          await tc.send(buildClosedTradeEmbed(trade));
+        }
+        continue;
+      }
 
       // ── TP hit ───────────────────────────────────────────────────────────
       if (update.hitTP) {
@@ -317,6 +367,58 @@ async function monitorActivePositions() {
   }
 }
 
+// ─── Watchlist dip monitor ────────────────────────────────────────────────────
+
+async function checkWatchlistDips(): Promise<void> {
+  for (const asset of CRYPTO_WATCHLIST) {
+    try {
+      const currentPrice = await fetchCurrentPrice(asset);
+
+      const watermark = watchlistHighWaterMark.get(asset);
+      if (!watermark) {
+        // First observation — seed the baseline and move on
+        watchlistHighWaterMark.set(asset, { price: currentPrice, timestamp: Date.now() });
+        continue;
+      }
+
+      // Raise high-water mark if price is making new highs
+      if (currentPrice > watermark.price) {
+        watchlistHighWaterMark.set(asset, { price: currentPrice, timestamp: Date.now() });
+        // Clear fired dip levels so they can re-arm if price rallies and then drops again
+        for (const level of DIP_LEVELS) {
+          watchlistDipAlertLog.delete(`${asset}:${level}`);
+        }
+        continue;
+      }
+
+      const dropPct = (watermark.price - currentPrice) / watermark.price;
+
+      // Fire alerts from largest threshold down, one per scan cycle per asset.
+      // Each level has its own cooldown so a 5% dip fires both the 3% and 5% alerts
+      // on their own independent timers.
+      for (const level of [...DIP_LEVELS].reverse()) {
+        if (dropPct < level) continue;
+
+        const key = `${asset}:${level}`;
+        const lastAlert = watchlistDipAlertLog.get(key) ?? 0;
+        if (Date.now() - lastAlert <= DIP_ALERT_COOLDOWN_MS) continue;
+
+        watchlistDipAlertLog.set(key, Date.now());
+        const dipChannel = await discordClient.channels.fetch(config.discord.signalChannelId).catch(() => null);
+        if (dipChannel?.isTextBased()) {
+          await (dipChannel as TextChannel).send(
+            buildWatchlistDipEmbed(asset, watermark.price, currentPrice, dropPct, watermark.timestamp)
+          );
+          logger.info(`Watchlist dip alert: ${asset} −${(dropPct * 100).toFixed(2)}% from recent high`);
+        }
+        break; // Only fire the highest triggered level per scan cycle
+      }
+    } catch (err) {
+      logger.warn(`Watchlist dip check failed for ${asset}:`, err);
+    }
+  }
+}
+
 // ─── Main scan loop ───────────────────────────────────────────────────────────
 
 export async function runScanCycle(): Promise<{ signalCount: number; skipped: boolean; reason?: string }> {
@@ -333,7 +435,10 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
     // 1. Monitor active positions first (most time-sensitive)
     await monitorActivePositions();
 
-    // 2. Fetch all asset data
+    // 2. Check for significant price drops across the crypto watchlist
+    await checkWatchlistDips();
+
+    // 3. Fetch all asset data
     let allData: MultiTimeframeData[];
     try {
       allData = await fetchAllAssets();

@@ -206,6 +206,7 @@ export interface SLTPUpdate {
   oldTP: number;
   newTP: number;
   hitTP: boolean;   // current price crossed TP
+  hitSL: boolean;   // current price crossed SL
   currentPrice: number;
 }
 
@@ -263,17 +264,23 @@ export function updateDynamicSLTP(
   // ── Check for TP breach ───────────────────────────────────────────────
   const hitTP = isLong ? currentPrice >= newTP : currentPrice <= newTP;
 
-  // Only report if TP extended meaningfully (> 0.2%) or if hit
+  // ── Check for SL breach ───────────────────────────────────────────────
+  const hitSL = isLong
+    ? currentPrice <= position.currentStopLoss
+    : currentPrice >= position.currentStopLoss;
+
+  // Only report if TP extended meaningfully (> 0.2%), TP hit, or SL hit
   const tpChangePct = Math.abs(newTP - oldTP) / oldTP;
   const significantChange = tpChangePct > 0.002;
 
-  if (!significantChange && !hitTP) return null;
+  if (!significantChange && !hitTP && !hitSL) return null;
 
   return {
     position,
     oldTP,
     newTP,
     hitTP,
+    hitSL,
     currentPrice,
   };
 }
@@ -285,6 +292,9 @@ export function updateDynamicSLTP(
 export function handleSLTPHit(update: SLTPUpdate): ClosedTrade | null {
   if (update.hitTP) {
     return closePosition(update.position.id, update.currentPrice, 'TP');
+  }
+  if (update.hitSL) {
+    return closePosition(update.position.id, update.currentPrice, 'SL');
   }
   return null;
 }

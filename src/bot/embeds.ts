@@ -164,7 +164,7 @@ export function buildPositionEmbed(position: ActivePosition, currentPrice?: numb
 
 export function buildExitAlertEmbed(
   position: ActivePosition,
-  type: 'TP_APPROACH' | 'TP_HIT' | 'SL_APPROACH',
+  type: 'TP_APPROACH' | 'TP_HIT' | 'SL_APPROACH' | 'SL_HIT',
   currentPrice: number,
   newTP?: number
 ) {
@@ -175,6 +175,7 @@ export function buildExitAlertEmbed(
     TP_APPROACH: { emoji: '🔔', title: 'TP APPROACHING',      color: 0x00ccff, desc: 'Price is near your take profit. Consider locking in gains.' },
     TP_HIT:      { emoji: '🎯', title: 'TAKE PROFIT HIT',     color: 0x00ff00, desc: 'Your take profit has been hit. Exit the trade on your exchange, then click **Close Position** below to record it.' },
     SL_APPROACH: { emoji: '⚠️', title: 'STOP LOSS NEARBY',   color: 0xff6600, desc: 'Price is closing in on your stop loss. Assess whether you still want to hold or cut early.' },
+    SL_HIT:      { emoji: '🛑', title: 'STOP LOSS HIT',       color: 0xff0000, desc: 'Your stop loss has been breached. The position has been closed automatically.' },
   };
 
   const { emoji, title, color, desc } = labels[type];
@@ -596,6 +597,45 @@ export function buildPositionHealthEmbed(
   );
 
   return { embeds: [embed], components: [closeRow] };
+}
+
+// ─── Watchlist dip alert embed ────────────────────────────────────────────────
+
+export function buildWatchlistDipEmbed(
+  asset: string,
+  highPrice: number,
+  currentPrice: number,
+  dropPct: number,
+  highTimestamp: number
+) {
+  const assetLabel = asset.split('/')[0];
+  const dropFormatted = (dropPct * 100).toFixed(2);
+  const ageMinutes = Math.round((Date.now() - highTimestamp) / 60_000);
+  const ageLabel = ageMinutes < 60
+    ? `${ageMinutes}m ago`
+    : `${Math.round(ageMinutes / 60)}h ago`;
+
+  const emoji = dropPct >= 0.08 ? '🚨' : dropPct >= 0.05 ? '🔴' : '⚠️';
+  const severity = dropPct >= 0.08 ? 'MAJOR DIP' : dropPct >= 0.05 ? 'SIGNIFICANT DIP' : 'PRICE DROP';
+  const color = dropPct >= 0.08 ? 0xcc0000 : dropPct >= 0.05 ? 0xff2200 : 0xff6600;
+
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle(`${emoji} ${assetLabel} — ${severity} (−${dropFormatted}%)`)
+    .setDescription(`**${assetLabel}** has dropped **${dropFormatted}%** from its recent high. No open position required — this is a raw market alert.`)
+    .addFields({
+      name: LINE,
+      value: [
+        `📈 **Recent High:** ${formatPrice(highPrice, assetLabel)}  *(${ageLabel})*`,
+        `💹 **Current Price:** ${formatPrice(currentPrice, assetLabel)}`,
+        `📉 **Drop:** −${dropFormatted}%`,
+      ].join('\n'),
+      inline: false,
+    })
+    .setTimestamp()
+    .setFooter({ text: 'Watchlist Dip Monitor — use /check to scan for short setups' });
+
+  return { embeds: [embed] };
 }
 
 // ─── Closed trade embed ────────────────────────────────────────────────────────
