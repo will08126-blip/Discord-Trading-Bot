@@ -6,6 +6,7 @@ import {
   sessionQualityScore,
 } from '../indicators/indicators';
 import { cachedAtr, cachedAtrAverage, cachedRsi, cachedEma } from '../indicators/cache';
+import { findSwing4hStop, findSwing4hTP, swingEmaScore } from './swingHelpers';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType, OHLCV } from '../types';
 
 
@@ -161,14 +162,10 @@ export class BreakoutRetestStrategy extends BaseStrategy {
         }
       }
 
-      // SWING: stop behind 6-candle 4h structural swing + 0.3×ATR4h
+      // SWING: structural 4h stop from real swing-point analysis (pro-grade placement)
       if (!stopModeSet) {
-        const recent4h    = candles4h.slice(-6);
-        const swing4hLow  = Math.min(...recent4h.map((c) => c.low));
-        const swing4hHigh = Math.max(...recent4h.map((c) => c.high));
-        const swingStop = isLong ? swing4hLow - lastAtr4h * 0.3 : swing4hHigh + lastAtr4h * 0.3;
-        const swingPct  = Math.abs(entryMid - swingStop) / entryMid;
-        if (swingPct > 0.015 && swingPct < 0.05) {
+        const swingStop = findSwing4hStop(candles4h, entryMid, isLong, lastAtr4h);
+        if (swingStop !== null) {
           stopLoss = swingStop;
           stopModeSet = true;
         }
@@ -179,11 +176,15 @@ export class BreakoutRetestStrategy extends BaseStrategy {
 
       if (stopDistance === 0) continue; // degenerate case
 
-      // TP: trade-type-aware R:R target (classify first so multiplier matches holding horizon).
+      // TP: trade-type-aware R:R target; SWING upgrades to structural 4h level.
       const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
       const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
       const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
-      const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+      let takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+      if (tradeType === 'SWING') {
+        const structTP = findSwing4hTP(candles4h, entryMid, stopLoss, isLong);
+        if (structTP !== null) takeProfit = structTP;
+      }
 
       // Entry zone: symmetric 0.1× ATR buffer on both sides for both directions
       const entryLow = isLong ? level - lastAtr5m * 0.1 : entryMid - lastAtr5m * 0.1;
@@ -192,13 +193,17 @@ export class BreakoutRetestStrategy extends BaseStrategy {
       // ── Scoring ────────────────────────────────────────────────────────
       const components = this.zeroComponents();
 
-      // HTF alignment: EMA direction on 15m
-      const ema20 = cachedEma(candles15m, 20);
-      const ema50 = cachedEma(candles15m, 50);
-      const n = candles15m.length - 1;
-      const htfAligned =
-        (isLong && ema20[n] > ema50[n]) || (!isLong && ema20[n] < ema50[n]);
-      components.htfAlignment = htfAligned ? 18 : 8;
+      // HTF alignment: SWING uses full 4h EMA structure; others use 15m EMA direction
+      if (tradeType === 'SWING') {
+        const emaInfo = swingEmaScore(candles4h, entryMid, isLong);
+        components.htfAlignment = emaInfo.htfScore;
+      } else {
+        const ema20 = cachedEma(candles15m, 20);
+        const ema50 = cachedEma(candles15m, 50);
+        const n = candles15m.length - 1;
+        const htfAligned = (isLong && ema20[n] > ema50[n]) || (!isLong && ema20[n] < ema50[n]);
+        components.htfAlignment = htfAligned ? 18 : 8;
+      }
 
       // Setup quality: first retest scores highest (most reliable)
       // 0 prior retests = fresh level, 1 = proven level, 2+ = overused

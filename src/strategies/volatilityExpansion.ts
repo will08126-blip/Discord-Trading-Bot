@@ -7,6 +7,7 @@ import {
   isVolumeSpike,
 } from '../indicators/indicators';
 import { cachedEma, cachedAtr, cachedAtrAverage } from '../indicators/cache';
+import { findSwing4hTP, swingEmaScore } from './swingHelpers';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 
@@ -128,11 +129,15 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
     // stopModeSet unused below — stopLoss is always a number from this point
 
     const stopDistance = Math.abs(entryMid - stopLoss);
-    // TP: trade-type-aware R:R target (classify first so multiplier matches holding horizon).
+    // TP: trade-type-aware R:R target; SWING upgrades to structural 4h level.
     const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
     const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
     const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
-    const takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+    let takeProfit = isLong ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+    if (tradeType === 'SWING') {
+      const structTP = findSwing4hTP(candles4h, entryMid, stopLoss, isLong);
+      if (structTP !== null) takeProfit = structTP;
+    }
 
     const entryZone: [number, number] = [
       entryMid - lastAtr5m * 0.15,
@@ -142,13 +147,18 @@ export class VolatilityExpansionStrategy extends BaseStrategy {
     // ── Scoring ───────────────────────────────────────────────────────────
     const components = this.zeroComponents();
 
-    // HTF alignment via 4h EMA
-    const ema20_4h = cachedEma(candles4h, 20);
-    const ema50_4h = cachedEma(candles4h, 50);
-    const htfAligned =
-      (isLong && ema20_4h[n4h] > ema50_4h[n4h]) ||
-      (!isLong && ema20_4h[n4h] < ema50_4h[n4h]);
-    components.htfAlignment = htfAligned ? 18 : 10;
+    // HTF alignment: SWING uses full 4h EMA structure analysis
+    if (tradeType === 'SWING') {
+      const emaInfo = swingEmaScore(candles4h, entryMid, isLong);
+      components.htfAlignment = emaInfo.htfScore;
+    } else {
+      const ema20_4h = cachedEma(candles4h, 20);
+      const ema50_4h = cachedEma(candles4h, 50);
+      const htfAligned =
+        (isLong && ema20_4h[n4h] > ema50_4h[n4h]) ||
+        (!isLong && ema20_4h[n4h] < ema50_4h[n4h]);
+      components.htfAlignment = htfAligned ? 18 : 10;
+    }
 
     // Setup quality: how long was the squeeze?
     const squezeDuration = this.measureSqueezeDuration(bb15m.width, 20);

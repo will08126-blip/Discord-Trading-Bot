@@ -10,6 +10,7 @@ import {
   isVolumeSpike,
 } from '../indicators/indicators';
 import { cachedEma, cachedAtr, cachedAtrAverage, cachedRsi } from '../indicators/cache';
+import { findSwing4hStop, findSwing4hTP, swingEmaScore } from './swingHelpers';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 
@@ -203,14 +204,10 @@ export class LiquiditySweepStrategy extends BaseStrategy {
           }
         }
 
-        // SWING: stop behind 6-candle 4h structural swing + 0.3×ATR4h
+        // SWING: structural 4h stop from real swing-point analysis (pro-grade placement)
         if (!stopModeSet) {
-          const recent4h    = candles4h.slice(-6);
-          const swing4hLow  = Math.min(...recent4h.map((cv: any) => cv.low));
-          const swing4hHigh = Math.max(...recent4h.map((cv: any) => cv.high));
-          const swingStop = isBullReversal ? swing4hLow - lastAtr4h * 0.3 : swing4hHigh + lastAtr4h * 0.3;
-          const swingPct  = Math.abs(entryMid - swingStop) / entryMid;
-          if (swingPct > 0.015 && swingPct < 0.05) {
+          const swingStop = findSwing4hStop(candles4h, entryMid, isBullReversal, lastAtr4h);
+          if (swingStop !== null) {
             stopLoss = swingStop;
             stopModeSet = true;
           }
@@ -221,7 +218,11 @@ export class LiquiditySweepStrategy extends BaseStrategy {
         const stopPct = entryMid > 0 ? stopDistance / entryMid : 0;
         const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : stopPct < 0.015 ? 'HYBRID' : 'SWING';
         const rrMultiplier = tradeType === 'SCALP' ? 4.0 : tradeType === 'HYBRID' ? 3.0 : 2.5;
-        const takeProfit = isBullReversal ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+        let takeProfit = isBullReversal ? entryMid + stopDistance * rrMultiplier : entryMid - stopDistance * rrMultiplier;
+        if (tradeType === 'SWING') {
+          const structTP = findSwing4hTP(candles4h, entryMid, stopLoss, isBullReversal);
+          if (structTP !== null) takeProfit = structTP;
+        }
 
         const entryZone: [number, number] = isBullReversal
           ? [entryMid - avgAtr5m * 0.1, entryMid + avgAtr5m * 0.2]
@@ -230,14 +231,19 @@ export class LiquiditySweepStrategy extends BaseStrategy {
         // ── Scoring ──────────────────────────────────────────────────
         const components = this.zeroComponents();
 
-        // HTF: check EMA alignment on 15m
-        const ema20 = cachedEma(candles15m, 20);
-        const ema50 = cachedEma(candles15m, 50);
-        const n = candles15m.length - 1;
-        const htfAligned =
-          (isBullReversal && ema20[n] > ema50[n]) ||
-          (!isBullReversal && ema20[n] < ema50[n]);
-        components.htfAlignment = htfAligned ? 16 : 10;
+        // HTF: SWING uses 4h structural EMA analysis; others use 15m EMA direction
+        if (tradeType === 'SWING') {
+          const emaInfo = swingEmaScore(candles4h, entryMid, isBullReversal);
+          components.htfAlignment = emaInfo.htfScore;
+        } else {
+          const ema20 = cachedEma(candles15m, 20);
+          const ema50 = cachedEma(candles15m, 50);
+          const n = candles15m.length - 1;
+          const htfAligned =
+            (isBullReversal && ema20[n] > ema50[n]) ||
+            (!isBullReversal && ema20[n] < ema50[n]);
+          components.htfAlignment = htfAligned ? 16 : 10;
+        }
 
         // Setup quality: strong wick is key
         components.setupQuality = Math.min(20, Math.round(wickRatio * 8 + 8));
