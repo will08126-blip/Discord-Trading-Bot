@@ -4,6 +4,7 @@ import type { OHLCV, Asset, Timeframe, MultiTimeframeData } from '../types';
 import { getCached, setCache } from './cache';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { isYahooAsset, fetchYahooOHLCV, fetchYahooCurrentPrice } from './yahooFinanceData';
 
 const TIMEFRAMES: Timeframe[] = ['4h', '15m', '5m', '1m'];
 const CANDLE_LIMIT = 200; // enough for all indicators
@@ -88,8 +89,14 @@ export async function fetchOHLCV(
   if (cached) return cached;
 
   logger.debug(`Fetching ${asset} ${timeframe} (${limit} candles)`);
-  const raw = await withFallback<any[][]>((ex) => ex.fetchOHLCV(asset, timeframe, undefined, limit));
-  const candles = toOHLCV(raw);
+
+  let candles: OHLCV[];
+  if (isYahooAsset(asset)) {
+    candles = await fetchYahooOHLCV(asset, timeframe, limit);
+  } else {
+    const raw = await withFallback<any[][]>((ex) => ex.fetchOHLCV(asset, timeframe, undefined, limit));
+    candles = toOHLCV(raw);
+  }
 
   checkStaleness(candles, timeframe);
   setCache(asset, timeframe, candles);
@@ -113,6 +120,9 @@ export async function fetchMultiTimeframe(asset: Asset): Promise<MultiTimeframeD
 
 /** Fetch current mid-price without going through OHLCV */
 export async function fetchCurrentPrice(asset: Asset): Promise<number> {
+  if (isYahooAsset(asset)) {
+    return fetchYahooCurrentPrice(asset);
+  }
   const ticker = await withFallback<any>((ex) => ex.fetchTicker(asset));
   // Prefer last traded price; fall back to candle close, then bid/ask mid-point
   const mid = (ticker.bid != null && ticker.ask != null) ? (ticker.bid + ticker.ask) / 2 : undefined;

@@ -90,7 +90,9 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
   //   leverage     = positionSize / capital = riskPct / stopDistancePct
   const impliedLeverage = stopDistancePct > 0 ? riskPct / 100 / stopDistancePct : 1;
   const maxLev = leverageCap(signal.tier, tradeType);
-  const suggestedLeverage = Math.max(1, Math.min(maxLev, Math.ceil(impliedLeverage)));
+  // Apply per-asset leverage cap for lower-volatility instruments (gold, silver, ETFs)
+  const assetCap = config.assetLeverageCap[signal.asset] ?? Infinity;
+  const suggestedLeverage = Math.max(1, Math.min(maxLev, assetCap, Math.ceil(impliedLeverage)));
 
   const deploymentScore = calculateDeploymentScore(signal);
 
@@ -109,16 +111,18 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
 
 export function formatPrice(price: number, asset: string): string {
   let decimals: number;
-  if (asset.startsWith('BTC')) {
-    decimals = 0;
+  if (asset.startsWith('BTC') || asset === 'XAU/USD') {
+    decimals = 0;  // BTC ~$80k, Gold ~$3000 — whole dollars are fine
+  } else if (asset === 'XAG/USD') {
+    decimals = 2;  // Silver ~$30
   } else if (price < 0.0001) {
     decimals = 8;  // micro-caps like PEPE (~0.000012)
   } else if (price < 1) {
     decimals = 5;  // sub-dollar assets
   } else if (price < 10) {
-    decimals = 4;  // $1-$10 assets like XRP — small moves matter at high leverage
+    decimals = 4;  // $1-$10 assets like XRP
   } else {
-    decimals = 2;  // higher-priced assets (ETH, SOL, BNB)
+    decimals = 2;  // higher-priced assets (ETH, SOL, QQQ, SPY, etc.)
   }
   return `$${price.toLocaleString('en-US', {
     minimumFractionDigits: decimals,
