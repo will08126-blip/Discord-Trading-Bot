@@ -35,10 +35,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
   }
 
   const stats = computeStats(trades);
-  const pnlStr =
-    stats.totalPnlDollar >= 0
-      ? `+$${stats.totalPnlDollar.toFixed(2)}`
-      : `-$${Math.abs(stats.totalPnlDollar).toFixed(2)}`;
+  // totalPnlDollar stores sum of R-multiples, not actual dollars
+  const pnlStr = `${stats.totalPnlDollar >= 0 ? '+' : ''}${stats.totalPnlDollar.toFixed(2)}R`;
 
   const embed = new EmbedBuilder()
     .setColor(stats.totalPnlDollar >= 0 ? 0x00ff87 : 0xff4444)

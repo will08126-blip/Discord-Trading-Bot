@@ -22,6 +22,8 @@ import {
   handleSLTPHit,
   attemptMomentumTPExtension,
 } from './signals/signalManager';
+import { analyseMarketStructure } from './analysis/marketStructure';
+import { findAreasOfValue, isPriceInZone } from './analysis/areaOfValue';
 import { checkHardControls, getStrategyWeight, getMinScoreThreshold } from './adaptation/adaptation';
 import {
   buildSignalEmbed,
@@ -30,6 +32,7 @@ import {
   buildClosedTradeEmbed,
   buildEarlyProfitAlertEmbed,
   buildPositionHealthEmbed,
+  buildSummaryEmbed,
 } from './bot/embeds';
 import { generateDailySummary } from './llm/summaries';
 import { cachedRsi, cachedEma, cachedVwap } from './indicators/cache';
@@ -57,6 +60,36 @@ const strategies = [
   new VolatilityExpansionStrategy(),
   new SwingStrategy(),
 ];
+
+/**
+ * Swing-first quality gate — applied to every signal before posting.
+ *
+ * Ensures that even non-Swing strategy signals are only posted when:
+ *  1. HTF bias (W/D/4H market structure) agrees with the signal direction.
+ *  2. Price is currently inside a valid area of value (≥2 confluence criteria).
+ *
+ * SwingStrategy signals already pass this check internally, so they are
+ * allowed through unconditionally (avoids re-running the same analysis).
+ */
+function passesSwingQualityGate(signal: StrategySignal, mtfData: MultiTimeframeData): boolean {
+  if (signal.strategy === 'Swing') return true; // already validated internally
+
+  try {
+    const bias = analyseMarketStructure(mtfData['1w'], mtfData['1d'], mtfData['4h']);
+    if (bias.confidence === 'LOW' || bias.direction === null) return false;
+    if (bias.direction !== signal.direction) return false;
+
+    const currentPrice = mtfData['4h'][mtfData['4h'].length - 1]?.close;
+    if (!currentPrice) return false;
+
+    const isLong = signal.direction === 'LONG';
+    const zones = findAreasOfValue(mtfData['1w'], mtfData['1d'], mtfData['4h'], currentPrice, isLong);
+    const qualifiedZones = zones.filter((z) => z.confluenceScore >= 2);
+    return qualifiedZones.some((z) => isPriceInZone(currentPrice, z));
+  } catch {
+    return false; // fail closed — don't post if gate errors
+  }
+}
 
 // ─── Last scan summary (read by /status) ─────────────────────────────────────
 
@@ -113,6 +146,7 @@ export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanRe
         signal = { ...signal, asset };
         const weight = getStrategyWeight(strategy.name);
         signal = applyAdaptationWeight(signal, weight);
+        if (!passesSwingQualityGate(signal, mtfData)) continue;
         signals.push(signal);
       } catch {
         // skip failing strategies silently
@@ -392,6 +426,10 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
             logger.info(`  ${strategy.name}: score=${signal.score} NO_TRADE${weightNote} — filtered out`);
             continue;
           }
+          if (!passesSwingQualityGate(signal, mtfData)) {
+            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — swing gate rejected (no HTF bias + zone confluence)`);
+            continue;
+          }
           if (isDuplicateSignal(signal)) {
             logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed (30min window)`);
             continue;
@@ -446,12 +484,26 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
 
 async function postDailySummary() {
   logger.info('Generating daily summary...');
+
+  const channelId = config.discord.summaryChannelId;
+  if (!channelId) {
+    logger.warn('postDailySummary: SUMMARY_CHANNEL_ID is not configured — set it in .env to receive daily summaries');
+    return;
+  }
+
   try {
-    const summary = await generateDailySummary();
-    const channel = await discordClient.channels.fetch(config.discord.summaryChannelId);
-    if (channel?.isTextBased()) {
-      await (channel as TextChannel).send(summary.slice(0, 2000));
+    const result = await generateDailySummary();
+    const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+    if (!channel) {
+      logger.error(`postDailySummary: could not fetch channel ${channelId} — check SUMMARY_CHANNEL_ID`);
+      return;
     }
+    if (!channel.isTextBased()) {
+      logger.error(`postDailySummary: channel ${channelId} is not a text channel`);
+      return;
+    }
+    await (channel as TextChannel).send(buildSummaryEmbed('daily', result.stats, result.aiText, result.label));
+    logger.info(`Daily summary posted (${result.stats.totalTrades} trades, ${(result.stats.winRate * 100).toFixed(0)}% WR)`);
   } catch (err) {
     logger.error('Daily summary error:', err);
   }
