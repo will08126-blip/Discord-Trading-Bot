@@ -25,7 +25,7 @@ let liveDashboard: {
 
 export const data = new SlashCommandBuilder()
   .setName('live')
-  .setDescription('Auto-updating watchlist: BTC, ETH, SOL, XRP, PEPE, Gold, Silver, QQQ, SPY')
+  .setDescription('Auto-updating watchlist: BTC, ETH, SOL, XRP, PEPE + Gold, Silver, QQQ, SPY')
   .addStringOption((opt) =>
     opt
       .setName('action')
