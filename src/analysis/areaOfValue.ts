@@ -87,6 +87,21 @@ function findExistingZone(candidateLevel: number, zoneCentres: number[]): number
   return -1;
 }
 
+const WEEKLY_ZONE_TOLERANCE = 0.008; // ±0.8%
+
+function collectWeeklyStructuralLevels(candles1w: OHLCV[], currentPrice: number): number[] {
+  if (candles1w.length < 2) return [];
+  const recent = candles1w.slice(-8); // last 8 weekly candles
+  const levels: number[] = [];
+  for (const candle of recent) {
+    const highDist = Math.abs(candle.high - currentPrice) / currentPrice;
+    const lowDist  = Math.abs(candle.low  - currentPrice) / currentPrice;
+    if (highDist <= 0.15) levels.push(candle.high); // within 15% of current price
+    if (lowDist  <= 0.15) levels.push(candle.low);
+  }
+  return levels;
+}
+
 export function findAreasOfValue(
   candles1w: OHLCV[],
   candles1d: OHLCV[],
@@ -100,13 +115,12 @@ export function findAreasOfValue(
 
   const inRange = (p: number) => p >= minPrice - searchRadius && p <= maxPrice + searchRadius;
 
+  // Weekly structural levels — highest priority zones (strength/priority 3)
+  const weeklyLevels = collectWeeklyStructuralLevels(candles1w, currentPrice).filter(inRange);
   const structuralLevels = collectStructuralLevels(candles1d, candles4h).filter(inRange);
   const emaLevels        = collectEmaLevels(candles1d, candles4h).filter((e) => inRange(e.level));
   const fibLevels        = computeFibLevels(candles1d).filter((f) => inRange(f.level));
   const volumeNodes      = detectVolumeNodes(candles4h).filter(inRange);
-
-  // candles1w is accepted for future use (weekly structure levels)
-  void candles1w;
 
   const zoneCentres: number[] = [];
   const zoneData: {
@@ -127,6 +141,8 @@ export function findAreasOfValue(
     }
   }
 
+  // Process weekly levels first (highest priority)
+  for (const level of weeklyLevels) mergeOrCreate(level, { hasStructure: true });
   for (const level of structuralLevels) mergeOrCreate(level, { hasStructure: true });
   for (const ema of emaLevels) {
     const idx = findExistingZone(ema.level, zoneCentres);

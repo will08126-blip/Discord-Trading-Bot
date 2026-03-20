@@ -166,6 +166,7 @@ function closePosition(
     closedAt: Date.now(),
     pnlPct,
     pnlDollar,
+    pnlR: rMultiple,
     exitReason: reason,
   };
 

@@ -62,7 +62,19 @@ export function buildSignalEmbed(signal: StrategySignal) {
 
   const title = `${tierEmoji(signal.tier)} ${signal.tier} ${signal.direction}  —  ${asset}/USDT`;
 
+  // Trade type badge
+  const tradeTypeBadge = signal.tradeType === 'SCALP'
+    ? `⚡ SCALP [${risk.suggestedLeverage}x]`
+    : signal.tradeType === 'SWING'
+    ? `📈 SWING [${risk.suggestedLeverage}x]`
+    : `🔄 HYBRID [${risk.suggestedLeverage}x]`;
+
   const signalFields: { name: string; value: string; inline: boolean }[] = [
+    {
+      name: '⚡ Trade Type',
+      value: tradeTypeBadge,
+      inline: true,
+    },
     {
       name: LINE,
       value: [
@@ -104,6 +116,11 @@ export function buildSignalEmbed(signal: StrategySignal) {
       value: '**Took this trade on your exchange?** Click ✅ **Entered** below — the bot will track it for you and alert you when to exit.',
       inline: false,
     },
+    ...(config.paper.enabled ? [{
+      name: '📄 Paper Trading',
+      value: 'Auto-entering this signal in paper account',
+      inline: false,
+    }] : []),
   ];
 
   const embed = new EmbedBuilder()

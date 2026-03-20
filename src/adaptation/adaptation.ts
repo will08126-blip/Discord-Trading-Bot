@@ -9,6 +9,7 @@ const STRATEGY_NAMES = [
   'Breakout Retest',
   'Liquidity Sweep',
   'Volatility Expansion',
+  'Swing',
 ];
 
 /**
@@ -21,6 +22,7 @@ const STRATEGY_WEIGHT_FLOOR: Record<string, number> = {
   'Breakout Retest':      0.75,
   'Liquidity Sweep':      0.80,
   'Volatility Expansion': 0.50,
+  'Swing':                0.70,
 };
 
 /**
@@ -33,6 +35,7 @@ export const RECOMMENDED_WEIGHTS: Record<string, number> = {
   'Breakout Retest':      1.0,
   'Liquidity Sweep':      1.0,
   'Volatility Expansion': 0.85,
+  'Swing':                1.0,
 };
 
 const DEFAULT_STATE: BotState = {

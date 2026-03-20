@@ -18,6 +18,10 @@ import * as tradeStatusCmd from './tradeStatus';
 import * as filterCmd from './filter';
 import * as weightsCmd from './weights';
 import * as pulseCmd from './pulse';
+import * as paperStatusCmd from './paper-status';
+import * as paperPositionsCmd from './paper-positions';
+import * as paperHistoryCmd from './paper-history';
+import * as paperPerformanceCmd from './paper-performance';
 
 export interface Command {
   data: { toJSON: () => unknown; name: string };
@@ -41,6 +45,10 @@ export const commands = new Map<string, Command>([
   ['check', checkCmd],
   ['live', liveCmd],
   ['trade-status', tradeStatusCmd],
+  ['paper-status', paperStatusCmd],
+  ['paper-positions', paperPositionsCmd],
+  ['paper-history', paperHistoryCmd],
+  ['paper-performance', paperPerformanceCmd],
 ]);
 
 /** Deploy (register) all slash commands with Discord's API */

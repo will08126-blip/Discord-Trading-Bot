@@ -42,7 +42,7 @@ export function addTrade(trade: ClosedTrade): void {
   saveTrades(trades);
   logger.info(
     `Trade closed: ${trade.signal.asset} ${trade.signal.direction} ` +
-    `${trade.exitReason} P&L=${trade.pnlDollar >= 0 ? '+' : ''}${trade.pnlDollar.toFixed(2)}R ` +
+    `${trade.exitReason} P&L=$${trade.pnlDollar >= 0 ? '+' : ''}${trade.pnlDollar.toFixed(2)} (${trade.pnlR >= 0 ? '+' : ''}${trade.pnlR.toFixed(2)}R) ` +
     `(${(trade.pnlPct * 100).toFixed(2)}%)`
   );
 }
@@ -50,8 +50,8 @@ export function addTrade(trade: ClosedTrade): void {
 // ─── Stats computation ────────────────────────────────────────────────────────
 
 export function computeStats(trades: ClosedTrade[]): PerformanceStats {
-  const wins = trades.filter((t) => t.pnlDollar > 0);
-  const losses = trades.filter((t) => t.pnlDollar <= 0);
+  const wins = trades.filter((t) => t.pnlPct > 0);
+  const losses = trades.filter((t) => t.pnlPct <= 0);
 
   const grossProfit = wins.reduce((s, t) => s + t.pnlDollar, 0);
   const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnlDollar, 0));
@@ -70,7 +70,7 @@ export function computeStats(trades: ClosedTrade[]): PerformanceStats {
       byStrategy[s] = { totalTrades: 0, wins: 0, losses: 0, winRate: 0, avgScore: 0 };
     }
     byStrategy[s].totalTrades++;
-    if (t.pnlDollar > 0) byStrategy[s].wins++;
+    if (t.pnlPct > 0) byStrategy[s].wins++;
     else byStrategy[s].losses++;
     byStrategy[s].avgScore += t.signal.score;
   }
@@ -89,7 +89,7 @@ export function computeStats(trades: ClosedTrade[]): PerformanceStats {
   for (const t of trades) {
     const tt = t.signal.tradeType ?? 'HYBRID';
     byTradeType[tt].trades++;
-    if (t.pnlDollar > 0) byTradeType[tt].wins++;
+    if (t.pnlPct > 0) byTradeType[tt].wins++;
   }
   for (const tt of Object.keys(byTradeType)) {
     const b = byTradeType[tt];
@@ -116,11 +116,11 @@ export function strategyWinRate(strategyName: string, lastN = 10): number {
     .filter((t) => t.signal.strategy === strategyName)
     .slice(-lastN);
   if (stratTrades.length === 0) return 0.5; // neutral default
-  const wins = stratTrades.filter((t) => t.pnlDollar > 0).length;
+  const wins = stratTrades.filter((t) => t.pnlPct > 0).length;
   return wins / stratTrades.length;
 }
 
-/** P&L for current calendar day (UTC) */
+/** P&L for current calendar day (UTC) in dollars */
 export function dailyPnl(): number {
   const today = new Date().toISOString().slice(0, 10);
   const trades = loadTrades();

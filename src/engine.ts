@@ -2,6 +2,8 @@ import cron from 'node-cron';
 import type { TextChannel } from 'discord.js';
 import { discordClient } from './bot/client';
 import { fetchAllAssets, fetchOHLCV, fetchCurrentPrice } from './data/marketData';
+import { checkPaperPositions, enterPaperTrade, buildDailyPaperReportEmbed } from './paper/paperTrading';
+import { initializeTopCryptos, refreshTopCryptos } from './data/topCryptos';
 import { detectRegime, isTradeableRegime, setLastRegime, getLastRegimes } from './regime/regimeDetector';
 import { TrendPullbackStrategy } from './strategies/trendPullback';
 import { BreakoutRetestStrategy } from './strategies/breakoutRetest';
@@ -174,6 +176,17 @@ async function postSignal(signal: StrategySignal) {
   await (channel as TextChannel).send(buildSignalEmbed(signal));
   addPendingSignal(signal);
   markSignalSent(signal);
+
+  // Auto-enter paper trade
+  if (config.paper.enabled) {
+    try {
+      const currentPrice = (signal.entryZone[0] + signal.entryZone[1]) / 2;
+      await enterPaperTrade(signal, currentPrice, channel as TextChannel);
+    } catch (err) {
+      logger.warn('Paper trade entry failed:', err);
+    }
+  }
+
   logger.info(`Signal posted: ${signal.asset} ${signal.direction} score=${signal.score} [${signal.tier}]`);
 }
 
@@ -512,6 +525,9 @@ async function postDailySummary() {
 // ─── Schedule setup ───────────────────────────────────────────────────────────
 
 export function startScheduler() {
+  // Initialize top 20 cryptos from CoinGecko
+  initializeTopCryptos().catch((err) => logger.error('Top cryptos init error:', err));
+
   const interval = config.engine.scanIntervalMinutes;
   logger.info(`Starting scan scheduler: every ${interval} min`);
 
@@ -532,5 +548,50 @@ export function startScheduler() {
   // Daily summary: midnight UTC
   cron.schedule('0 0 * * *', () => {
     postDailySummary().catch((err) => logger.error('Unhandled summary error:', err));
+    // Daily paper trading report
+    try {
+      discordClient.channels.fetch(config.discord.signalChannelId).then((ch) => {
+        if (ch?.isTextBased()) {
+          const date = new Date().toISOString().slice(0, 10);
+          (ch as TextChannel).send(buildDailyPaperReportEmbed(date)).catch((err) => {
+            logger.error('Paper daily report error:', err);
+          });
+        }
+      }).catch((err) => {
+        logger.error('Paper daily report channel fetch error:', err);
+      });
+    } catch (err) {
+      logger.error('Paper daily report error:', err);
+    }
+    // Refresh top cryptos cache
+    refreshTopCryptos().catch((err) => logger.error('Top cryptos refresh error:', err));
   });
+
+  // Scalp position monitoring — every 90s
+  const scalpIntervalMs = config.monitoring.scalpIntervalSeconds * 1000;
+  setInterval(async () => {
+    try {
+      const ch = await discordClient.channels.fetch(config.discord.signalChannelId).catch(() => null);
+      if (!ch?.isTextBased()) return;
+      const tc = ch as TextChannel;
+      // Monitor paper scalp positions
+      await checkPaperPositions(tc);
+    } catch (err) {
+      logger.error('Scalp monitoring loop error:', err);
+    }
+  }, scalpIntervalMs);
+
+  // Swing position monitoring — every 20 min
+  const swingIntervalMs = config.monitoring.swingIntervalSeconds * 1000;
+  setInterval(async () => {
+    try {
+      const ch = await discordClient.channels.fetch(config.discord.signalChannelId).catch(() => null);
+      if (!ch?.isTextBased()) return;
+      const tc = ch as TextChannel;
+      // Monitor paper swing positions
+      await checkPaperPositions(tc);
+    } catch (err) {
+      logger.error('Swing monitoring loop error:', err);
+    }
+  }, swingIntervalMs);
 }

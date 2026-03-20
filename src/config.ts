@@ -13,6 +13,19 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
+function optionalNum(key: string, fallback: number): number {
+  const v = process.env[key];
+  if (!v) return fallback;
+  const n = Number(v);
+  return isFinite(n) ? n : fallback;
+}
+
+function optionalBool(key: string, fallback: boolean): boolean {
+  const v = process.env[key];
+  if (!v) return fallback;
+  return v.toLowerCase() === 'true';
+}
+
 export const config = {
   discord: {
     token: requireEnv('DISCORD_TOKEN'),
@@ -30,20 +43,20 @@ export const config = {
     assets: [
       'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'PEPE/USDT',
       'XAU/USD',  'XAG/USD',  'QQQ/USD',  'SPY/USD',
-    ] as const,
-    maxOpenPositions: Number(optionalEnv('MAX_OPEN_POSITIONS', '3')),
-    maxDailyLoss: Number(optionalEnv('MAX_DAILY_LOSS', '150')),
-    minScoreThreshold: Number(optionalEnv('MIN_SCORE_THRESHOLD', '60')),
-    maxLeverageScalp:  Number(optionalEnv('MAX_LEVERAGE_SCALP',  '75')),
-    maxLeverageHybrid: Number(optionalEnv('MAX_LEVERAGE_HYBRID', '50')),
-    maxLeverageSwing:  Number(optionalEnv('MAX_LEVERAGE_SWING',  '10')),
-    earlyProfitAlertPct: Number(optionalEnv('EARLY_PROFIT_ALERT_PCT', '0.25')),
-    targetReturnPct:     Number(optionalEnv('TARGET_RETURN_PCT',      '0')),
+    ] as string[],
+    maxOpenPositions: optionalNum('MAX_OPEN_POSITIONS', 3),
+    maxDailyLoss: optionalNum('MAX_DAILY_LOSS', 150),
+    minScoreThreshold: optionalNum('MIN_SCORE_THRESHOLD', 60),
+    maxLeverageScalp:  optionalNum('MAX_LEVERAGE_SCALP',  75),
+    maxLeverageHybrid: optionalNum('MAX_LEVERAGE_HYBRID', 50),
+    maxLeverageSwing:  optionalNum('MAX_LEVERAGE_SWING',  10),
+    earlyProfitAlertPct: optionalNum('EARLY_PROFIT_ALERT_PCT', 0.25),
+    targetReturnPct:     optionalNum('TARGET_RETURN_PCT',      0),
   },
 
   engine: {
-    scanIntervalMinutes: Number(optionalEnv('SCAN_INTERVAL_MINUTES', '5')),
-    enabled: optionalEnv('ENABLED', 'true') === 'true',
+    scanIntervalMinutes: optionalNum('SCAN_INTERVAL_MINUTES', 5),
+    enabled: optionalBool('ENABLED', true),
     exchangeId: optionalEnv('EXCHANGE_ID', 'binance'),
     duplicateWindowMs: 30 * 60 * 1000,
     staleThresholds: {
@@ -56,10 +69,27 @@ export const config = {
     } as Record<string, number>,
   },
 
+  paper: {
+    enabled: optionalBool('PAPER_TRADING_ENABLED', true),
+    startingBalance: optionalNum('PAPER_BALANCE', 1000),
+  },
+
+  monitoring: {
+    scalpIntervalSeconds: optionalNum('SCALP_MONITOR_INTERVAL_SECONDS', 90),
+    swingIntervalSeconds: optionalNum('SWING_MONITOR_INTERVAL_SECONDS', 1200),
+  },
+
+  coingecko: {
+    apiKey: optionalEnv('COINGECKO_API_KEY', ''),
+  },
+
   paths: {
     data: path.join(process.cwd(), 'data'),
     tradesFile: path.join(process.cwd(), 'data', 'trades.json'),
     stateFile: path.join(process.cwd(), 'data', 'state.json'),
+    paperTradesFile: path.join(process.cwd(), 'data', 'paper_trades.json'),
+    paperStateFile: path.join(process.cwd(), 'data', 'paper_state.json'),
+    topCryptosCache: path.join(process.cwd(), 'data', 'top_cryptos_cache.json'),
     logsDir: path.join(process.cwd(), 'logs'),
   },
 
@@ -82,6 +112,6 @@ export const config = {
     'QQQ/USD': 5,
     'SPY/USD': 5,
   } as Partial<Record<string, number>>,
-} as const;
+};
 
 export type Config = typeof config;

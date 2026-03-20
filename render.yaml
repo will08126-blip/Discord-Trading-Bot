@@ -38,6 +38,16 @@ services:
         value: "0.5"
       - key: TARGET_RETURN_PCT
         value: "1.0"
+      - key: PAPER_TRADING_ENABLED
+        value: "true"
+      - key: PAPER_BALANCE
+        value: "1000"
+      - key: SCALP_MONITOR_INTERVAL_SECONDS
+        value: "90"
+      - key: SWING_MONITOR_INTERVAL_SECONDS
+        value: "1200"
+      - key: COINGECKO_API_KEY
+        sync: false
       - key: NODE_ENV
         value: production
     disk:

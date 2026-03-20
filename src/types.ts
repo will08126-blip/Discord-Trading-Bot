@@ -1,6 +1,4 @@
-export type Asset =
-  | 'BTC/USDT' | 'ETH/USDT' | 'SOL/USDT' | 'XRP/USDT' | 'PEPE/USDT'
-  | 'XAU/USD'  | 'XAG/USD'  | 'QQQ/USD'  | 'SPY/USD';
+export type Asset = string;
 export type Timeframe = '1w' | '1d' | '4h' | '15m' | '5m' | '1m';
 export type Direction = 'LONG' | 'SHORT';
 export type Regime =
@@ -99,6 +97,7 @@ export interface ClosedTrade extends ActivePosition {
   closedAt: number;
   pnlPct: number;
   pnlDollar: number;
+  pnlR: number;      // R-multiple: pnl_pct / stop_distance_pct
   exitReason: ExitReason;
 }
 
@@ -188,4 +187,37 @@ export interface SwingMeta {
   rr: number;
   suggestedLeverage: number;     // dynamic: 3% risk cap / stopPct, hard cap 10x
   capitalAtRiskPct: number;      // stopPct × leverage (always ≤ 0.03)
+}
+
+// ─── Paper Trading Types ──────────────────────────────────────────────────────
+
+export type PaperTradeStatus = 'pending' | 'active' | 'closed';
+export type PaperCloseReason = 'SL hit' | 'TP hit' | 'EMA breakdown' | 'manual';
+
+export interface PaperTrade {
+  id: string;
+  asset: string;
+  direction: 'LONG' | 'SHORT';
+  entryPrice: number;
+  currentPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  positionSizeDollars: number;
+  leverage: number;
+  strategy: string;
+  tradeType: string;
+  status: PaperTradeStatus;
+  openTime: string;      // ISO string
+  closeTime?: string;
+  exitPrice?: number;
+  pnlDollar?: number;
+  pnlR?: number;
+  closeReason?: PaperCloseReason;
+  balanceAfter?: number;
+}
+
+export interface PaperState {
+  virtualBalance: number;
+  startingBalance: number;
+  lastUpdated: string;
 }
