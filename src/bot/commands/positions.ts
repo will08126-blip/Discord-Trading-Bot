@@ -13,11 +13,6 @@ export const data = new SlashCommandBuilder()
   .setName('positions')
   .setDescription('List all currently tracked (confirmed) positions');
 
-// Singular alias — registered separately in index.ts so both /position and /positions work
-export const dataAlias = new SlashCommandBuilder()
-  .setName('position')
-  .setDescription('List all currently tracked (confirmed) positions');
-
 export async function execute(interaction: ChatInputCommandInteraction) {
   // Use reply() directly — getAllActivePositions() is a synchronous in-memory read,
   // so this completes in <1ms, well within the 3-second interaction window.

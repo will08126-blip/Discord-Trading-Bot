@@ -40,12 +40,8 @@ const COMMAND_SECTIONS = [
         desc: 'Deep analysis of any symbol (e.g. BTC, SOL, DOGE). Shows all 4 strategy results including setups below the score threshold.',
       },
       {
-        name: '/watchlist',
-        desc: 'Snapshot scan of BTC, ETH, SOL, XRP, PEPE — shows qualifying signals with score, leverage, and risk %.',
-      },
-      {
         name: '/live <start|stop>',
-        desc: 'Auto-updating watchlist that refreshes every 5 minutes. Only one dashboard active at a time.',
+        desc: 'Auto-updating watchlist for BTC, ETH, SOL, XRP, PEPE — refreshes every 5 minutes. Only one dashboard active at a time. Use `/live stop` to dismiss it.',
       },
     ],
   },

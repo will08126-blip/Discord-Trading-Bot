@@ -13,7 +13,6 @@ import * as historyCmd from './history';
 import * as helpCmd from './help';
 import * as configCmd from './config';
 import * as checkCmd from './check';
-import * as watchlistCmd from './watchlist';
 import * as liveCmd from './live';
 import * as tradeStatusCmd from './tradeStatus';
 import * as filterCmd from './filter';
@@ -25,19 +24,12 @@ export interface Command {
   execute: (interaction: any) => Promise<void>;
 }
 
-// Singular alias — same execute handler, different SlashCommandBuilder (different name)
-const positionAliasCmd: Command = {
-  data: positionsCmd.dataAlias,
-  execute: positionsCmd.execute,
-};
-
 export const commands = new Map<string, Command>([
   ['pulse', pulseCmd],
   ['filter', filterCmd],
   ['weights', weightsCmd],
   ['status', statusCmd],
   ['positions', positionsCmd],
-  ['position',  positionAliasCmd],  // singular alias so both /position and /positions work
   ['close', closeCmd],
   ['performance', performanceCmd],
   ['toggle', toggleCmd],
@@ -47,7 +39,6 @@ export const commands = new Map<string, Command>([
   ['help', helpCmd],
   ['config', configCmd],
   ['check', checkCmd],
-  ['watchlist', watchlistCmd],
   ['live', liveCmd],
   ['trade-status', tradeStatusCmd],
 ]);
