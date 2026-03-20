@@ -6,16 +6,17 @@ import { config } from '../config';
 import { logger } from '../utils/logger';
 import { isYahooAsset, fetchYahooOHLCV, fetchYahooCurrentPrice } from './yahooFinanceData';
 
-const TIMEFRAMES: Timeframe[] = ['4h', '15m', '5m', '1m'];
-const CANDLE_LIMIT = 200; // enough for all indicators
+// Candle limits per timeframe — swing analysis needs more history on HTF
+const CANDLE_LIMITS: Record<string, number> = {
+  '1w':  100,   // ~2 years of weekly structure
+  '1d':  200,   // ~9 months of daily structure
+  '4h':  200,
+  '15m': 200,
+  '5m':  200,
+  '1m':  200,
+};
 
-// Spot exchanges only — no geo-restricted futures endpoints.
-// All three support BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, PEPE/USDT with no API key.
 const EXCHANGE_PRIORITY = ['binance', 'gate', 'mexc'];
-
-// One reusable CCXT instance per exchange — preserves per-instance rate-limit tracking.
-// withFallback() loops through these with a LOCAL index so concurrent calls cannot
-// corrupt each other's state (the old single currentExchangeIndex was not concurrency-safe).
 const exchangePool: Record<string, any> = {};
 
 function resolveStartIndex(): number {
@@ -29,7 +30,7 @@ function getPooledExchange(id: string): any {
     logger.info(`[marketData] Initialising exchange: ${id}`);
     exchangePool[id] = new ccxt[id]({
       enableRateLimit: true,
-      timeout: 10000, // 10 s — fail fast rather than hanging indefinitely
+      timeout: 10000,
     });
   }
   return exchangePool[id];
@@ -39,7 +40,6 @@ function isAvailabilityError(err: unknown): boolean {
   return err instanceof ccxt.ExchangeNotAvailable || err instanceof ccxt.NetworkError;
 }
 
-// Each call owns its own local index — safe to run concurrently.
 async function withFallback<T>(fn: (ex: any) => Promise<T>): Promise<T> {
   let lastErr: unknown;
   for (let i = resolveStartIndex(); i < EXCHANGE_PRIORITY.length; i++) {
@@ -48,7 +48,7 @@ async function withFallback<T>(fn: (ex: any) => Promise<T>): Promise<T> {
       return await fn(getPooledExchange(id));
     } catch (err) {
       lastErr = err;
-      if (!isAvailabilityError(err)) throw err; // non-availability error — don't cascade
+      if (!isAvailabilityError(err)) throw err;
       logger.warn(
         `[marketData] Exchange "${id}" unavailable (${(err as Error).message?.slice(0, 80)}). ` +
           `Falling back to "${EXCHANGE_PRIORITY[i + 1] ?? 'none'}".`
@@ -83,18 +83,21 @@ function checkStaleness(candles: OHLCV[], timeframe: Timeframe): void {
 export async function fetchOHLCV(
   asset: Asset,
   timeframe: Timeframe,
-  limit = CANDLE_LIMIT
+  limit?: number
 ): Promise<OHLCV[]> {
+  const resolvedLimit = limit ?? CANDLE_LIMITS[timeframe] ?? 200;
   const cached = getCached(asset, timeframe);
   if (cached) return cached;
 
-  logger.debug(`Fetching ${asset} ${timeframe} (${limit} candles)`);
+  logger.debug(`Fetching ${asset} ${timeframe} (${resolvedLimit} candles)`);
 
   let candles: OHLCV[];
   if (isYahooAsset(asset)) {
-    candles = await fetchYahooOHLCV(asset, timeframe, limit);
+    candles = await fetchYahooOHLCV(asset, timeframe, resolvedLimit);
   } else {
-    const raw = await withFallback<any[][]>((ex) => ex.fetchOHLCV(asset, timeframe, undefined, limit));
+    const raw = await withFallback<any[][]>((ex) =>
+      ex.fetchOHLCV(asset, timeframe, undefined, resolvedLimit)
+    );
     candles = toOHLCV(raw);
   }
 
@@ -105,26 +108,31 @@ export async function fetchOHLCV(
 }
 
 export async function fetchMultiTimeframe(asset: Asset): Promise<MultiTimeframeData> {
-  const [tf4h, tf15m, tf5m, tf1m] = await Promise.all(
-    TIMEFRAMES.map((tf) => fetchOHLCV(asset, tf))
-  );
+  const [tf1w, tf1d, tf4h, tf15m, tf5m, tf1m] = await Promise.all([
+    fetchOHLCV(asset, '1w'),
+    fetchOHLCV(asset, '1d'),
+    fetchOHLCV(asset, '4h'),
+    fetchOHLCV(asset, '15m'),
+    fetchOHLCV(asset, '5m'),
+    fetchOHLCV(asset, '1m'),
+  ]);
 
   return {
     asset,
-    '4h': tf4h,
+    '1w':  tf1w,
+    '1d':  tf1d,
+    '4h':  tf4h,
     '15m': tf15m,
-    '5m': tf5m,
-    '1m': tf1m,
+    '5m':  tf5m,
+    '1m':  tf1m,
   };
 }
 
-/** Fetch current mid-price without going through OHLCV */
 export async function fetchCurrentPrice(asset: Asset): Promise<number> {
   if (isYahooAsset(asset)) {
     return fetchYahooCurrentPrice(asset);
   }
   const ticker = await withFallback<any>((ex) => ex.fetchTicker(asset));
-  // Prefer last traded price; fall back to candle close, then bid/ask mid-point
   const mid = (ticker.bid != null && ticker.ask != null) ? (ticker.bid + ticker.ask) / 2 : undefined;
   const price = ticker.last ?? ticker.close ?? mid;
   if (!price || price <= 0) {
@@ -133,7 +141,6 @@ export async function fetchCurrentPrice(asset: Asset): Promise<number> {
   return price;
 }
 
-/** Fetch all assets in parallel */
 export async function fetchAllAssets(): Promise<MultiTimeframeData[]> {
   return Promise.all(
     config.trading.assets.map((asset) => fetchMultiTimeframe(asset as Asset))

@@ -7,6 +7,7 @@ import { TrendPullbackStrategy } from './strategies/trendPullback';
 import { BreakoutRetestStrategy } from './strategies/breakoutRetest';
 import { LiquiditySweepStrategy } from './strategies/liquiditySweep';
 import { VolatilityExpansionStrategy } from './strategies/volatilityExpansion';
+import { SwingStrategy } from './strategies/swing';
 import {
   applyAdaptationWeight,
   filterAndRankSignals,
@@ -54,6 +55,7 @@ const strategies = [
   new BreakoutRetestStrategy(),
   new LiquiditySweepStrategy(),
   new VolatilityExpansionStrategy(),
+  new SwingStrategy(),
 ];
 
 // ─── Last scan summary (read by /status) ─────────────────────────────────────
@@ -83,7 +85,9 @@ export interface SingleAssetScanResult {
 export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanResult> {
   try {
     const asset = symbol as Asset;
-    const [candles4h, candles15m, candles5m, candles1m] = await Promise.all([
+    const [candles1w, candles1d, candles4h, candles15m, candles5m, candles1m] = await Promise.all([
+      fetchOHLCV(asset, '1w'),
+      fetchOHLCV(asset, '1d'),
       fetchOHLCV(asset, '4h', 200),
       fetchOHLCV(asset, '15m', 200),
       fetchOHLCV(asset, '5m', 200),
@@ -91,10 +95,12 @@ export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanRe
     ]);
     const mtfData: MultiTimeframeData = {
       asset,
-      '4h': candles4h,
+      '1w':  candles1w,
+      '1d':  candles1d,
+      '4h':  candles4h,
       '15m': candles15m,
-      '5m': candles5m,
-      '1m': candles1m,
+      '5m':  candles5m,
+      '1m':  candles1m,
     };
     const regime = detectRegime(asset, candles4h);
     setLastRegime(asset, regime);
