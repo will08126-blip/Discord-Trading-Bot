@@ -11,6 +11,10 @@ const WATCHLIST: Asset[] = [
   'SOL/USDT',
   'XRP/USDT',
   'PEPE/USDT',
+  'XAU/USD',
+  'XAG/USD',
+  'QQQ/USD',
+  'SPY/USD',
 ];
 
 // Module-scoped state — only one live dashboard active at a time
@@ -21,7 +25,7 @@ let liveDashboard: {
 
 export const data = new SlashCommandBuilder()
   .setName('live')
-  .setDescription('Auto-updating watchlist for BTC, ETH, SOL, XRP, PEPE — refreshes every 5 minutes')
+  .setDescription('Auto-updating watchlist: BTC, ETH, SOL, XRP, PEPE + Gold, Silver, QQQ, SPY')
   .addStringOption((opt) =>
     opt
       .setName('action')

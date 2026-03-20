@@ -33,6 +33,8 @@ const YAHOO_INTERVAL_MAP: Record<string, string> = {
   '5m':  '5m',
   '15m': '15m',
   '4h':  '1h',  // fetch 1h, then aggregate 4:1 into synthetic 4h candles
+  '1d':  '1d',
+  '1w':  '1wk',
 };
 
 /** Milliseconds per timeframe interval — used to compute period1 for fetching */
@@ -41,6 +43,8 @@ const INTERVAL_MS: Record<string, number> = {
   '5m':  5  * 60 * 1000,
   '15m': 15 * 60 * 1000,
   '1h':  60 * 60 * 1000,
+  '1d':  24 * 60 * 60 * 1000,
+  '1wk': 7  * 24 * 60 * 60 * 1000,
 };
 
 export function isYahooAsset(asset: Asset): boolean {
@@ -94,7 +98,7 @@ export async function fetchYahooOHLCV(
 
   const result = await yahooFinance.chart(symbol, {
     period1,
-    interval: yahooInterval as '1m' | '5m' | '15m' | '1h',
+    interval: yahooInterval as '1m' | '5m' | '15m' | '1h' | '1d' | '1wk',
   });
 
   if (!result?.quotes?.length) {

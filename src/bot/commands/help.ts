@@ -41,7 +41,7 @@ const COMMAND_SECTIONS = [
       },
       {
         name: '/live <start|stop>',
-        desc: 'Auto-updating watchlist for BTC, ETH, SOL, XRP, PEPE — refreshes every 5 minutes. Only one dashboard active at a time. Use `/live stop` to dismiss it.',
+        desc: 'Auto-updating watchlist for BTC, ETH, SOL, XRP, PEPE, Gold, Silver, QQQ, and SPY — refreshes every 5 minutes. Only one dashboard active at a time. Use `/live stop` to dismiss it.',
       },
     ],
   },

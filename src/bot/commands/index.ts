@@ -66,6 +66,11 @@ export async function deployCommands(guildId?: string): Promise<void> {
         { body: commandBodies }
       );
       logger.info(`Deployed ${commandBodies.length} guild commands to guild ${guildId}`);
+
+      // Clear any stale global commands — if both guild and global commands exist for the
+      // same bot they show as duplicates in Discord's slash command menu.
+      await rest.put(Routes.applicationCommands(config.discord.clientId), { body: [] });
+      logger.info('Cleared global commands to prevent duplicate entries in Discord');
     } else {
       // Global commands (up to 1h propagation delay)
       await rest.put(
