@@ -7,7 +7,13 @@ import {
   loadTrades,
 } from '../performance/tracker';
 import { logger } from '../utils/logger';
-import type { ClosedTrade } from '../types';
+import type { ClosedTrade, PerformanceStats } from '../types';
+
+export interface SummaryResult {
+  stats: PerformanceStats;
+  aiText: string | null;
+  label: string;
+}
 
 let client: Anthropic | null = null;
 
@@ -40,50 +46,51 @@ Never provide financial advice or tell the trader what to do next.`;
 
 // ─── Daily Summary ─────────────────────────────────────────────────────────
 
-export async function generateDailySummary(): Promise<string> {
+export async function generateDailySummary(): Promise<SummaryResult> {
+  const today = new Date().toISOString().slice(0, 10);
+  const label = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const stats = computeStats(
+    loadTrades().filter((t) => new Date(t.closedAt).toISOString().slice(0, 10) === today)
+  );
+
+  if (stats.totalTrades === 0) {
+    return { stats, aiText: null, label };
+  }
+
   try {
     const context = buildDailySummaryContext();
-    const stats = computeStats(loadTrades().filter(
-      (t) => new Date(t.closedAt).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10)
-    ));
-
-    if (stats.totalTrades === 0) {
-      return '📊 **Daily Summary** — No trades completed today.';
-    }
-
-    const response = await callClaude(
+    const aiText = await callClaude(
       SYSTEM_PROMPT,
       `Here is today's trading data:\n\n${context}\n\nPlease provide a brief daily performance summary.`
     );
-
-    return `📊 **Daily Summary**\n\n${response}`;
+    return { stats, aiText, label };
   } catch (err) {
-    logger.error('Failed to generate daily summary:', err);
-    return fallbackDailySummary();
+    logger.error('Daily summary AI call failed:', err);
+    return { stats, aiText: null, label };
   }
 }
 
 // ─── Weekly Summary ────────────────────────────────────────────────────────
 
-export async function generateWeeklySummary(): Promise<string> {
+export async function generateWeeklySummary(): Promise<SummaryResult> {
+  const label = 'Last 7 Days';
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const stats = computeStats(loadTrades().filter((t) => t.closedAt >= weekAgo));
+
+  if (stats.totalTrades === 0) {
+    return { stats, aiText: null, label };
+  }
+
   try {
     const context = buildWeeklySummaryContext();
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const stats = computeStats(loadTrades().filter((t) => t.closedAt >= weekAgo));
-
-    if (stats.totalTrades === 0) {
-      return '📈 **Weekly Summary** — No trades completed this week.';
-    }
-
-    const response = await callClaude(
+    const aiText = await callClaude(
       SYSTEM_PROMPT,
       `Here is this week's trading data:\n\n${context}\n\nPlease provide a weekly performance summary with key insights.`
     );
-
-    return `📈 **Weekly Summary**\n\n${response}`;
+    return { stats, aiText, label };
   } catch (err) {
-    logger.error('Failed to generate weekly summary:', err);
-    return fallbackWeeklySummary();
+    logger.error('Weekly summary AI call failed:', err);
+    return { stats, aiText: null, label };
   }
 }
 
@@ -93,7 +100,7 @@ export async function explainTrade(trade: ClosedTrade): Promise<string> {
   try {
     const dir = trade.signal.direction;
     const asset = trade.signal.asset.split('/')[0];
-    const pnl = trade.pnlDollar >= 0 ? `+$${trade.pnlDollar.toFixed(2)}` : `-$${Math.abs(trade.pnlDollar).toFixed(2)}`;
+    const pnl = `${trade.pnlDollar >= 0 ? '+' : ''}${trade.pnlDollar.toFixed(2)}R (${(trade.pnlPct * 100).toFixed(2)}%)`;
     const context = [
       `Asset: ${asset}`,
       `Direction: ${dir}`,
@@ -120,41 +127,3 @@ export async function explainTrade(trade: ClosedTrade): Promise<string> {
   }
 }
 
-// ─── Fallback summaries (no API key) ──────────────────────────────────────
-
-function fallbackDailySummary(): string {
-  const today = new Date().toISOString().slice(0, 10);
-  const todayTrades = loadTrades().filter(
-    (t) => new Date(t.closedAt).toISOString().slice(0, 10) === today
-  );
-  const stats = computeStats(todayTrades);
-  const pnlStr = stats.totalPnlDollar >= 0 ? `+$${stats.totalPnlDollar.toFixed(2)}` : `-$${Math.abs(stats.totalPnlDollar).toFixed(2)}`;
-
-  return [
-    `📊 **Daily Summary** — ${today}`,
-    `Trades: ${stats.totalTrades} | W: ${stats.wins} L: ${stats.losses} | WR: ${(stats.winRate * 100).toFixed(0)}%`,
-    `P&L: ${pnlStr} | Profit Factor: ${stats.profitFactor.toFixed(2)}`,
-    `Avg Setup Score: ${stats.avgScore.toFixed(1)}/100`,
-    Object.entries(stats.byStrategy)
-      .map(([n, s]) => `  ${n}: ${s.totalTrades} trades, ${(s.winRate * 100).toFixed(0)}% WR`)
-      .join('\n'),
-  ].join('\n');
-}
-
-function fallbackWeeklySummary(): string {
-  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const weekTrades = loadTrades().filter((t) => t.closedAt >= weekAgo);
-  const stats = computeStats(weekTrades);
-  const pnlStr = stats.totalPnlDollar >= 0 ? `+$${stats.totalPnlDollar.toFixed(2)}` : `-$${Math.abs(stats.totalPnlDollar).toFixed(2)}`;
-
-  return [
-    `📈 **Weekly Summary**`,
-    `Trades: ${stats.totalTrades} | W: ${stats.wins} L: ${stats.losses} | WR: ${(stats.winRate * 100).toFixed(0)}%`,
-    `P&L: ${pnlStr} | Profit Factor: ${stats.profitFactor.toFixed(2)}`,
-    `Scalp WR: ${(stats.byTradeType['SCALP']?.winRate * 100 || 0).toFixed(0)}% | Swing WR: ${(stats.byTradeType['SWING']?.winRate * 100 || 0).toFixed(0)}%`,
-    `\nStrategy breakdown:`,
-    ...Object.entries(stats.byStrategy).map(
-      ([n, s]) => `  ${n}: ${s.totalTrades} trades, ${(s.winRate * 100).toFixed(0)}% WR, avg score ${s.avgScore.toFixed(1)}`
-    ),
-  ].join('\n');
-}

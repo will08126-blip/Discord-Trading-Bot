@@ -42,7 +42,8 @@ export function addTrade(trade: ClosedTrade): void {
   saveTrades(trades);
   logger.info(
     `Trade closed: ${trade.signal.asset} ${trade.signal.direction} ` +
-    `${trade.exitReason} P&L=${trade.pnlDollar >= 0 ? '+' : ''}$${trade.pnlDollar.toFixed(2)}`
+    `${trade.exitReason} P&L=${trade.pnlDollar >= 0 ? '+' : ''}${trade.pnlDollar.toFixed(2)}R ` +
+    `(${(trade.pnlPct * 100).toFixed(2)}%)`
   );
 }
 
@@ -143,7 +144,7 @@ export function buildDailySummaryContext(): string {
     `Date: ${today}`,
     `Total trades: ${stats.totalTrades}`,
     `Wins: ${stats.wins} | Losses: ${stats.losses} | Win rate: ${(stats.winRate * 100).toFixed(1)}%`,
-    `Total P&L: $${stats.totalPnlDollar.toFixed(2)}`,
+    `Total R: ${stats.totalPnlDollar >= 0 ? '+' : ''}${stats.totalPnlDollar.toFixed(2)}R`,
     `Profit factor: ${stats.profitFactor.toFixed(2)}`,
     `Average setup score: ${stats.avgScore.toFixed(1)}`,
     '',
@@ -151,7 +152,7 @@ export function buildDailySummaryContext(): string {
     ...todayTrades.map((t) =>
       `  ${t.signal.asset} ${t.signal.direction} (${t.signal.strategy}) ` +
       `Score=${t.signal.score} Entry=${t.entryPrice.toFixed(2)} Exit=${t.exitPrice.toFixed(2)} ` +
-      `P&L=$${t.pnlDollar.toFixed(2)} Reason=${t.exitReason}`
+      `Result=${t.pnlDollar >= 0 ? '+' : ''}${t.pnlDollar.toFixed(2)}R (${(t.pnlPct * 100).toFixed(2)}%) Reason=${t.exitReason}`
     ),
   ];
   return lines.join('\n');
@@ -167,7 +168,7 @@ export function buildWeeklySummaryContext(): string {
     `Weekly summary (last 7 days)`,
     `Total trades: ${stats.totalTrades}`,
     `Wins: ${stats.wins} | Losses: ${stats.losses} | Win rate: ${(stats.winRate * 100).toFixed(1)}%`,
-    `Total P&L: $${stats.totalPnlDollar.toFixed(2)}`,
+    `Total R: ${stats.totalPnlDollar >= 0 ? '+' : ''}${stats.totalPnlDollar.toFixed(2)}R`,
     `Profit factor: ${stats.profitFactor.toFixed(2)}`,
     '',
     'Strategy breakdown:',

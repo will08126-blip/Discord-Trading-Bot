@@ -1,5 +1,6 @@
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import type { StrategySignal, ActivePosition, ClosedTrade } from '../types';
+import type { PerformanceStats } from '../types';
 import { calculateRisk, formatPrice } from '../risk/riskCalculator';
 import { regimeLabel } from '../regime/regimeDetector';
 import { tierEmoji, tierColor } from '../scoring/votingEngine';
@@ -647,6 +648,58 @@ export function buildClosedTradeEmbed(trade: ClosedTrade) {
     })
     .setTimestamp(trade.closedAt)
     .setFooter({ text: `Session closed` });
+
+  return { embeds: [embed] };
+}
+
+// ─── Daily / Weekly summary embed ─────────────────────────────────────────────
+// Used by the midnight cron and /report command.
+
+export function buildSummaryEmbed(
+  type: 'daily' | 'weekly',
+  stats: PerformanceStats,
+  aiText: string | null,
+  label: string  // e.g. "March 20, 2026" or "Last 7 Days"
+) {
+  const isProfit  = stats.totalPnlDollar >= 0;
+  const noTrades  = stats.totalTrades === 0;
+  const rStr = `${stats.totalPnlDollar >= 0 ? '+' : ''}${stats.totalPnlDollar.toFixed(2)}R`;
+  const title = type === 'daily' ? `📊 Daily Summary — ${label}` : `📈 Weekly Summary — ${label}`;
+  const color = noTrades ? 0x5865f2 : isProfit ? 0x00ff87 : 0xff4444;
+
+  const embed = new EmbedBuilder().setColor(color).setTitle(title).setTimestamp();
+
+  if (noTrades) {
+    embed.setDescription('No trades completed during this period.');
+    return { embeds: [embed] };
+  }
+
+  // Overview field
+  embed.addFields({
+    name: LINE,
+    value: [
+      `Trades: **${stats.totalTrades}**  (W: ${stats.wins}  L: ${stats.losses})`,
+      `Win Rate: **${(stats.winRate * 100).toFixed(1)}%**  |  Profit Factor: **${stats.profitFactor.toFixed(2)}**`,
+      `Total R: **${rStr}**`,
+      `Avg Setup Score: **${stats.avgScore.toFixed(1)}/100**`,
+    ].join('\n'),
+    inline: false,
+  });
+
+  // Strategy breakdown
+  const stratLines = Object.entries(stats.byStrategy).map(
+    ([name, s]) => `**${name}:** ${s.totalTrades} trades  |  ${(s.winRate * 100).toFixed(0)}% WR  |  avg score ${s.avgScore.toFixed(1)}`
+  );
+  if (stratLines.length > 0) {
+    embed.addFields({ name: 'Strategy Breakdown', value: stratLines.join('\n'), inline: false });
+  }
+
+  // AI commentary (if available)
+  if (aiText) {
+    // Discord field value limit is 1024 chars
+    const truncated = aiText.length > 1024 ? aiText.slice(0, 1021) + '…' : aiText;
+    embed.addFields({ name: '🤖 Analysis', value: truncated, inline: false });
+  }
 
   return { embeds: [embed] };
 }

@@ -32,6 +32,7 @@ import {
   buildClosedTradeEmbed,
   buildEarlyProfitAlertEmbed,
   buildPositionHealthEmbed,
+  buildSummaryEmbed,
 } from './bot/embeds';
 import { generateDailySummary } from './llm/summaries';
 import { cachedRsi, cachedEma, cachedVwap } from './indicators/cache';
@@ -483,12 +484,26 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
 
 async function postDailySummary() {
   logger.info('Generating daily summary...');
+
+  const channelId = config.discord.summaryChannelId;
+  if (!channelId) {
+    logger.warn('postDailySummary: SUMMARY_CHANNEL_ID is not configured — set it in .env to receive daily summaries');
+    return;
+  }
+
   try {
-    const summary = await generateDailySummary();
-    const channel = await discordClient.channels.fetch(config.discord.summaryChannelId);
-    if (channel?.isTextBased()) {
-      await (channel as TextChannel).send(summary.slice(0, 2000));
+    const result = await generateDailySummary();
+    const channel = await discordClient.channels.fetch(channelId).catch(() => null);
+    if (!channel) {
+      logger.error(`postDailySummary: could not fetch channel ${channelId} — check SUMMARY_CHANNEL_ID`);
+      return;
     }
+    if (!channel.isTextBased()) {
+      logger.error(`postDailySummary: channel ${channelId} is not a text channel`);
+      return;
+    }
+    await (channel as TextChannel).send(buildSummaryEmbed('daily', result.stats, result.aiText, result.label));
+    logger.info(`Daily summary posted (${result.stats.totalTrades} trades, ${(result.stats.winRate * 100).toFixed(0)}% WR)`);
   } catch (err) {
     logger.error('Daily summary error:', err);
   }
