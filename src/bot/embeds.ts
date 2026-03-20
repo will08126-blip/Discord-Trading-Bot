@@ -41,6 +41,17 @@ function buildDeploymentMeter(score: number): string {
   return `${dots}  ${score}/100\n${label}`;
 }
 
+function biasEmoji(bias: string): string {
+  return bias === 'BULLISH' ? '📈' : bias === 'BEARISH' ? '📉' : '➡️';
+}
+
+function triggerLabel(trigger: string): string {
+  if (trigger === 'DISPLACEMENT')    return '📊 Displacement candle';
+  if (trigger === 'RSI_DIVERGENCE')  return '📉 RSI divergence';
+  if (trigger === 'LIQUIDITY_SWEEP') return '💧 Liquidity sweep';
+  return trigger;
+}
+
 // ─── Signal embed ─────────────────────────────────────────────────────────────
 
 export function buildSignalEmbed(signal: StrategySignal) {
@@ -51,6 +62,50 @@ export function buildSignalEmbed(signal: StrategySignal) {
   const title = `${tierEmoji(signal.tier)} ${signal.tier} ${signal.direction}  —  ${asset}/USDT`;
   const tradeTypeLabel = signal.tradeType === 'SCALP' ? '⚡ Scalp' : signal.tradeType === 'HYBRID' ? '🔀 Hybrid' : '🌊 Swing';
 
+  const signalFields: { name: string; value: string; inline: boolean }[] = [
+    {
+      name: LINE,
+      value: [
+        `📍 **Entry Zone:**  ${formatPrice(signal.entryZone[0], asset)} – ${formatPrice(signal.entryZone[1], asset)}`,
+        `🛑 **Stop Loss:**   ${formatPrice(signal.stopLoss, asset)}  (${pct(signal.stopLoss, entry)})`,
+        `🎯 **Take Profit:** ${formatPrice(signal.takeProfit, asset)}  (${pct(signal.takeProfit, entry)})`,
+        `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x`,
+      ].join('\n'),
+      inline: false,
+    },
+    {
+      name: '💰 Capital Deployment Confidence',
+      value: buildDeploymentMeter(risk.deploymentScore),
+      inline: false,
+    },
+    ...(signal.swingMeta ? [{
+      name: '🌊 Swing Analysis',
+      value: [
+        `**Bias:** W:${biasEmoji(signal.swingMeta.bias.weeklyBias)} D:${biasEmoji(signal.swingMeta.bias.dailyBias)} 4H:${biasEmoji(signal.swingMeta.bias.fourHourBias)}  (${signal.swingMeta.bias.confidence} confidence)`,
+        `**Zone:** ${signal.swingMeta.zone.notes}`,
+        `**Trigger:** ${triggerLabel(signal.swingMeta.trigger)}  (quality: ${signal.swingMeta.triggerQuality}/15)`,
+        `**Leverage:** ${signal.swingMeta.suggestedLeverage}x  |  **Capital at risk:** ${(signal.swingMeta.capitalAtRiskPct * 100).toFixed(1)}%`,
+        `**R:R:** ${signal.swingMeta.rr.toFixed(1)}:1${signal.swingMeta.extendedTP ? `  |  **Ext TP:** ${formatPrice(signal.swingMeta.extendedTP, asset)}` : ''}`,
+      ].join('\n'),
+      inline: false,
+    }] : []),
+    {
+      name: LINE,
+      value: [
+        `HTF Align ${signal.components.htfAlignment}/20  |  Setup ${signal.components.setupQuality}/20  |  Momentum ${signal.components.momentum}/15`,
+        `Volatility ${signal.components.volatilityQuality}/10  |  Regime ${signal.components.regimeFit}/10  |  Liquidity ${signal.components.liquidity}/10`,
+        `Slippage ${signal.components.slippageRisk}/5  |  Session ${signal.components.sessionQuality}/5  |  Perf ${signal.components.recentPerformance}/5`,
+        signal.notes ? `\n📝 ${signal.notes}` : '',
+      ].filter(Boolean).join('\n'),
+      inline: false,
+    },
+    {
+      name: LINE,
+      value: '**Took this trade on your exchange?** Click ✅ **Entered** below — the bot will track it for you and alert you when to exit.',
+      inline: false,
+    },
+  ];
+
   const embed = new EmbedBuilder()
     .setColor(tierColor(signal.tier))
     .setTitle(title)
@@ -58,37 +113,7 @@ export function buildSignalEmbed(signal: StrategySignal) {
       `**Strategy:** ${signal.strategy}  |  ${tradeTypeLabel}  |  **Score:** ${signal.score}/100\n` +
       `**Regime:** ${regimeLabel(signal.regime)}`
     )
-    .addFields(
-      {
-        name: LINE,
-        value: [
-          `📍 **Entry Zone:**  ${formatPrice(signal.entryZone[0], asset)} – ${formatPrice(signal.entryZone[1], asset)}`,
-          `🎯 **Take Profit:** ${formatPrice(signal.takeProfit, asset)}  (${pct(signal.takeProfit, entry)})`,
-          `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x`,
-        ].join('\n'),
-        inline: false,
-      },
-      {
-        name: '💰 Capital Deployment Confidence',
-        value: buildDeploymentMeter(risk.deploymentScore),
-        inline: false,
-      },
-      {
-        name: LINE,
-        value: [
-          `HTF Align ${signal.components.htfAlignment}/20  |  Setup ${signal.components.setupQuality}/20  |  Momentum ${signal.components.momentum}/15`,
-          `Volatility ${signal.components.volatilityQuality}/10  |  Regime ${signal.components.regimeFit}/10  |  Liquidity ${signal.components.liquidity}/10`,
-          `Slippage ${signal.components.slippageRisk}/5  |  Session ${signal.components.sessionQuality}/5  |  Perf ${signal.components.recentPerformance}/5`,
-          signal.notes ? `\n📝 ${signal.notes}` : '',
-        ].filter(Boolean).join('\n'),
-        inline: false,
-      },
-      {
-        name: LINE,
-        value: '**Took this trade on your exchange?** Click ✅ **Entered** below — the bot will track it for you and alert you when to exit.',
-        inline: false,
-      }
-    )
+    .addFields(signalFields)
     .setTimestamp(signal.timestamp)
     .setFooter({ text: `Signal ID: ${signal.id.slice(0, 8)}` });
 

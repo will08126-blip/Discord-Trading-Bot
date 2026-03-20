@@ -1,7 +1,7 @@
 export type Asset =
   | 'BTC/USDT' | 'ETH/USDT' | 'SOL/USDT' | 'XRP/USDT' | 'PEPE/USDT'
   | 'XAU/USD'  | 'XAG/USD'  | 'QQQ/USD'  | 'SPY/USD';
-export type Timeframe = '4h' | '15m' | '5m' | '1m';
+export type Timeframe = '1w' | '1d' | '4h' | '15m' | '5m' | '1m';
 export type Direction = 'LONG' | 'SHORT';
 export type Regime =
   | 'TREND_UP'
@@ -14,9 +14,10 @@ export type ScoreTier = 'NO_TRADE' | 'MEDIUM' | 'STRONG' | 'ELITE';
 export type ExitReason = 'TP' | 'SL' | 'MANUAL' | 'CONDITION_CHANGE';
 
 /**
- * SCALP  → SL < 0.3%, 5m/1m entry, hold < 1h,   high leverage (up to 50x)
- * HYBRID → SL 0.3-1.5%, 5m/15m, hold 1-4h,       medium leverage (up to 30x)
- * SWING  → SL > 1.5%, 15m/4h,  hold 4-24h,        lower leverage (up to 20x)
+ * SCALP  → SL < 0.3%, 5m/1m entry, hold < 1h,    high leverage (up to 75x)
+ * HYBRID → SL 0.3-1.5%, 5m/15m, hold 1-4h,        medium leverage (up to 50x)
+ * SWING  → SL 0.3-4%, 4h/Daily, hold 24-72 hours,  dynamic leverage (3% risk cap / stopPct, max 10x)
+ *           Requires Weekly + Daily + 4h structural confluence.
  */
 export type TradeType = 'SCALP' | 'HYBRID' | 'SWING';
 
@@ -31,10 +32,12 @@ export interface OHLCV {
 
 export interface MultiTimeframeData {
   asset: Asset;
+  '1w': OHLCV[];   // Weekly — HTF structural bias
+  '1d': OHLCV[];   // Daily  — primary swing anchor
   '4h': OHLCV[];
   '15m': OHLCV[];
   '5m': OHLCV[];
-  '1m'?: OHLCV[]; // fetched on demand; not used by any current strategy
+  '1m'?: OHLCV[];
 }
 
 export interface ScoreComponents {
@@ -64,6 +67,7 @@ export interface StrategySignal {
   regime: Regime;
   timestamp: number;
   notes?: string;
+  swingMeta?: SwingMeta;  // populated only for SWING trade type
 }
 
 export interface ActivePosition {
@@ -71,36 +75,30 @@ export interface ActivePosition {
   signal: StrategySignal;
   entryPrice: number;
   suggestedLeverage: number;
-  riskPct: number;             // % of capital to risk (confidence-based)
+  riskPct: number;
   confirmedAt: number;
-  messageId: string;           // Discord message ID for edits
+  messageId: string;
   channelId: string;
-  // Dynamic TP tracking
-  currentStopLoss: number;     // original SL — kept for R-multiple calc, not monitored
-  currentTakeProfit: number;   // may extend from original
-  highestPrice: number;        // for long TP extension tracking (peak since entry)
-  lowestPrice: number;         // for short TP extension tracking (trough since entry)
-  lastSLTPUpdateAt: number;    // timestamp of last adjustment
-  tpExtensionCount: number;    // TP extensions used (milestone auto + momentum, max 5)
-  exitAlertSent: boolean;      // legacy field — kept for persisted-position compat
-  // Multi-level profit milestone tracking
-  // Stored as a sorted array (serialisable). Each milestone fires exactly once,
-  // regardless of whether price pulls back and rallies through it again.
+  currentStopLoss: number;
+  currentTakeProfit: number;
+  highestPrice: number;
+  lowestPrice: number;
+  lastSLTPUpdateAt: number;
+  tpExtensionCount: number;
+  exitAlertSent: boolean;
   firedMilestones?: number[];
-  /** @deprecated replaced by firedMilestones; kept for backward-compat with persisted positions */
+  /** @deprecated */
   lastProfitMilestonePct?: number;
-  // SL proximity alert tracking
-  slProximityAlertAt?: number;      // timestamp of last SL proximity alert
-  // Price-move health update tracking
-  lastHealthUpdatePrice?: number;  // price at time of last health update notification
-  lastHealthUpdateAt?: number;     // timestamp of last health update notification
+  slProximityAlertAt?: number;
+  lastHealthUpdatePrice?: number;
+  lastHealthUpdateAt?: number;
 }
 
 export interface ClosedTrade extends ActivePosition {
   exitPrice: number;
   closedAt: number;
-  pnlPct: number;           // % from entry
-  pnlDollar: number;        // estimated USD P&L on suggested size
+  pnlPct: number;
+  pnlDollar: number;
   exitReason: ExitReason;
 }
 
@@ -127,16 +125,67 @@ export interface StrategyStats {
 export interface BotState {
   enabled: boolean;
   dailyLoss: number;
-  dailyLossDate: string;         // YYYY-MM-DD
-  strategyWeights: Record<string, number>; // 0.5–1.0
-  minScoreThreshold?: number;    // runtime override; falls back to config default (60) if unset
+  dailyLossDate: string;
+  strategyWeights: Record<string, number>;
+  minScoreThreshold?: number;
 }
 
 export interface RegimeResult {
   asset: Asset;
   regime: Regime;
   adx: number;
-  atrRatio: number;        // current ATR / ATR average
+  atrRatio: number;
   emaAligned: boolean;
   timestamp: number;
+}
+
+// ─── Swing trade types ────────────────────────────────────────────────────────
+
+export type StructuralBias = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+export type SwingBiasConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+/**
+ * Result of top-down market structure analysis across Weekly, Daily, 4h.
+ * HIGH   = all 3 agree on HH/HL or LH/LL structure.
+ * MEDIUM = Daily + 4h agree (Weekly neutral/insufficient data).
+ * LOW    = no tradeable confluence — no swing signal fires.
+ */
+export interface SwingBias {
+  direction: 'LONG' | 'SHORT' | null;
+  confidence: SwingBiasConfidence;
+  weeklyBias: StructuralBias;
+  dailyBias: StructuralBias;
+  fourHourBias: StructuralBias;
+  agreementCount: number;
+  notes: string;
+}
+
+/** A zone where multiple value criteria converge */
+export interface AreaOfValue {
+  priceHigh: number;
+  priceLow: number;
+  midpoint: number;
+  confluenceScore: number;       // 0–4, one point per criterion met
+  hasStructure: boolean;
+  hasEmaConfluence: boolean;
+  hasFibLevel: boolean;
+  hasVolumeNode: boolean;
+  nearestFibPct: number | null;
+  notes: string;
+}
+
+export type SwingTrigger = 'DISPLACEMENT' | 'RSI_DIVERGENCE' | 'LIQUIDITY_SWEEP';
+
+/** Swing-specific metadata attached to a StrategySignal */
+export interface SwingMeta {
+  bias: SwingBias;
+  zone: AreaOfValue;
+  trigger: SwingTrigger;
+  triggerQuality: number;        // 0–15
+  stopSwingPoint: number;
+  primaryTP: number;
+  extendedTP: number | null;
+  rr: number;
+  suggestedLeverage: number;     // dynamic: 3% risk cap / stopPct, hard cap 10x
+  capitalAtRiskPct: number;      // stopPct × leverage (always ≤ 0.03)
 }
