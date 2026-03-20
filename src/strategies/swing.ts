@@ -8,8 +8,8 @@
  *  4. STOP    — Below/above the structural swing point
  *  5. TARGET  — Next structural level at ≥2.5:1 R:R
  *
- * Leverage: dynamic = 3% / stopPct, capped at 10x
- * Hold: 24–72 hours
+ * Leverage: tier-based (ELITE 10x, STRONG 8x, MEDIUM 5x) — no dynamic risk-cap formula.
+ * Hold: 1–5 days
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -18,19 +18,17 @@ import { analyseMarketStructure, findStructuralStopPoint, findStructuralTargets 
 import { findAreasOfValue, isPriceInZone } from '../analysis/areaOfValue';
 import { cachedRsi, cachedAtr, cachedAtrAverage } from '../indicators/cache';
 import { hasBullishDivergence, hasBearishDivergence, sessionQualityScore } from '../indicators/indicators';
+import { config } from '../config';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, AreaOfValue, SwingTrigger, SwingMeta, OHLCV } from '../types';
 
-const MIN_ZONE_CONFLUENCE      = 2;
-const MIN_RR_PRIMARY           = 2.5;
+const MIN_ZONE_CONFLUENCE        = 2;
+const MIN_RR_PRIMARY             = 2.5;
 const DISPLACEMENT_BODY_ATR_MULT = 0.6;
 const DISPLACEMENT_VOLUME_MULT   = 1.3;
 const SWEEP_WICK_THRESHOLD_PCT   = 0.002;
 const STOP_ATR_BUFFER            = 0.25;
 const MIN_STOP_PCT = 0.003;
 const MAX_STOP_PCT = 0.04;
-const CAPITAL_RISK_CAP = 0.03;
-const MAX_LEVERAGE = 10;
-const MIN_LEVERAGE = 1;
 
 export class SwingStrategy extends BaseStrategy {
   readonly name = 'Swing';
@@ -81,13 +79,6 @@ export class SwingStrategy extends BaseStrategy {
       const stopPct  = stopDist / currentPrice;
       if (stopPct < MIN_STOP_PCT || stopPct > MAX_STOP_PCT) continue;
 
-      // Dynamic leverage
-      const rawLeverage = CAPITAL_RISK_CAP / stopPct;
-      const suggestedLeverage = Math.max(
-        MIN_LEVERAGE,
-        Math.min(MAX_LEVERAGE, Math.round(rawLeverage * 2) / 2)
-      );
-
       const targets = findStructuralTargets(candles1d, candles4h, currentPrice, stopLoss, isLong);
       if (targets.primary === null) {
         targets.primary = isLong
@@ -126,6 +117,9 @@ export class SwingStrategy extends BaseStrategy {
         score >= 80 ? 'ELITE' : score >= 60 ? 'STRONG' : score >= 40 ? 'MEDIUM' : 'NO_TRADE';
       if (tier === 'NO_TRADE') continue;
 
+      // Tier-based leverage (ELITE=10x, STRONG=8x, MEDIUM=5x) — no dynamic formula.
+      const swingLevTiers = config.leverageTiers['swing'] as Record<string, number>;
+      const suggestedLeverage = swingLevTiers[tier] ?? 5;
       const capitalAtRisk = stopPct * suggestedLeverage;
 
       const swingMeta: SwingMeta = {

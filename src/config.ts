@@ -63,12 +63,11 @@ export const config = {
     logsDir: path.join(process.cwd(), 'logs'),
   },
 
-  // SWING leverage is DYNAMIC (3% risk cap / stopPct, max 10x).
-  // These tier values are HARD CAPS applied on top of the dynamic calculation.
+  // SWING leverage is TIER-BASED (not dynamic). User target: 5-10x.
   leverageTiers: {
     scalp:  { ELITE: 75, STRONG: 50, MEDIUM: 20, NO_TRADE: 0 },
     hybrid: { ELITE: 50, STRONG: 35, MEDIUM: 15, NO_TRADE: 0 },
-    swing:  { ELITE: 10, STRONG: 7,  MEDIUM: 5,  NO_TRADE: 0 },
+    swing:  { ELITE: 10, STRONG: 8,  MEDIUM: 5,  NO_TRADE: 0 },
   } as Record<string, Record<string, number>>,
 
   scoreTiers: {

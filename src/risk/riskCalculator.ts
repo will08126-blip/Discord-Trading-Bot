@@ -84,15 +84,20 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
   // Confidence-based risk %
   const riskPct = RISK_PCT[typeKey][signal.tier] ?? 1.0;
 
-  // Leverage: based on how much notional you need vs capital to achieve riskPct
-  // At riskPct% risk with stopDistancePct% stop:
-  //   positionSize = capital * riskPct% / stopDistancePct%
-  //   leverage     = positionSize / capital = riskPct / stopDistancePct
-  const impliedLeverage = stopDistancePct > 0 ? riskPct / 100 / stopDistancePct : 1;
-  const maxLev = leverageCap(signal.tier, tradeType);
-  // Apply per-asset leverage cap for lower-volatility instruments (gold, silver, ETFs)
   const assetCap = config.assetLeverageCap[signal.asset] ?? Infinity;
-  const suggestedLeverage = Math.max(1, Math.min(maxLev, assetCap, Math.ceil(impliedLeverage)));
+  const maxLev = leverageCap(signal.tier, tradeType);
+
+  let suggestedLeverage: number;
+  if (tradeType === 'SWING') {
+    // Swing trades: use tier-based leverage directly (user target: 5–10x).
+    // The risk-cap formula (riskPct/stopPct) yields 1–2x on wide structural stops
+    // which is far too conservative for 1–5 day swing trading.
+    suggestedLeverage = Math.max(1, Math.min(maxLev, assetCap));
+  } else {
+    // Scalp / Hybrid: derive leverage from desired risk % and stop distance
+    const impliedLeverage = stopDistancePct > 0 ? riskPct / 100 / stopDistancePct : 1;
+    suggestedLeverage = Math.max(1, Math.min(maxLev, assetCap, Math.ceil(impliedLeverage)));
+  }
 
   const deploymentScore = calculateDeploymentScore(signal);
 

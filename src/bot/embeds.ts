@@ -60,7 +60,6 @@ export function buildSignalEmbed(signal: StrategySignal) {
   const entry = risk.entryPrice;
 
   const title = `${tierEmoji(signal.tier)} ${signal.tier} ${signal.direction}  —  ${asset}/USDT`;
-  const tradeTypeLabel = signal.tradeType === 'SCALP' ? '⚡ Scalp' : signal.tradeType === 'HYBRID' ? '🔀 Hybrid' : '🌊 Swing';
 
   const signalFields: { name: string; value: string; inline: boolean }[] = [
     {
@@ -69,7 +68,8 @@ export function buildSignalEmbed(signal: StrategySignal) {
         `📍 **Entry Zone:**  ${formatPrice(signal.entryZone[0], asset)} – ${formatPrice(signal.entryZone[1], asset)}`,
         `🛑 **Stop Loss:**   ${formatPrice(signal.stopLoss, asset)}  (${pct(signal.stopLoss, entry)})`,
         `🎯 **Take Profit:** ${formatPrice(signal.takeProfit, asset)}  (${pct(signal.takeProfit, entry)})`,
-        `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x`,
+        `📐 **R:R:** ${risk.rewardRiskRatio.toFixed(2)}:1  |  **Lev:** ${risk.suggestedLeverage}x` +
+          (signal.swingMeta ? `  |  **Risk:** ${(signal.swingMeta.capitalAtRiskPct * 100).toFixed(1)}% capital` : ''),
       ].join('\n'),
       inline: false,
     },
@@ -82,11 +82,10 @@ export function buildSignalEmbed(signal: StrategySignal) {
       name: '🌊 Swing Analysis',
       value: [
         `**Bias:** W:${biasEmoji(signal.swingMeta.bias.weeklyBias)} D:${biasEmoji(signal.swingMeta.bias.dailyBias)} 4H:${biasEmoji(signal.swingMeta.bias.fourHourBias)}  (${signal.swingMeta.bias.confidence} confidence)`,
-        `**Zone:** ${signal.swingMeta.zone.notes}`,
+        `**Zone:** ${signal.swingMeta.zone.notes}  [${signal.swingMeta.zone.confluenceScore}/4]`,
         `**Trigger:** ${triggerLabel(signal.swingMeta.trigger)}  (quality: ${signal.swingMeta.triggerQuality}/15)`,
-        `**Leverage:** ${signal.swingMeta.suggestedLeverage}x  |  **Capital at risk:** ${(signal.swingMeta.capitalAtRiskPct * 100).toFixed(1)}%`,
-        `**R:R:** ${signal.swingMeta.rr.toFixed(1)}:1${signal.swingMeta.extendedTP ? `  |  **Ext TP:** ${formatPrice(signal.swingMeta.extendedTP, asset)}` : ''}`,
-      ].join('\n'),
+        signal.swingMeta.extendedTP ? `**Extended TP:** ${formatPrice(signal.swingMeta.extendedTP, asset)}` : '',
+      ].filter(Boolean).join('\n'),
       inline: false,
     }] : []),
     {
@@ -110,7 +109,7 @@ export function buildSignalEmbed(signal: StrategySignal) {
     .setColor(tierColor(signal.tier))
     .setTitle(title)
     .setDescription(
-      `**Strategy:** ${signal.strategy}  |  ${tradeTypeLabel}  |  **Score:** ${signal.score}/100\n` +
+      `**Strategy:** ${signal.strategy}  |  **Score:** ${signal.score}/100\n` +
       `**Regime:** ${regimeLabel(signal.regime)}`
     )
     .addFields(signalFields)

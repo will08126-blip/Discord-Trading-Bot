@@ -22,6 +22,8 @@ import {
   handleSLTPHit,
   attemptMomentumTPExtension,
 } from './signals/signalManager';
+import { analyseMarketStructure } from './analysis/marketStructure';
+import { findAreasOfValue, isPriceInZone } from './analysis/areaOfValue';
 import { checkHardControls, getStrategyWeight, getMinScoreThreshold } from './adaptation/adaptation';
 import {
   buildSignalEmbed,
@@ -57,6 +59,36 @@ const strategies = [
   new VolatilityExpansionStrategy(),
   new SwingStrategy(),
 ];
+
+/**
+ * Swing-first quality gate — applied to every signal before posting.
+ *
+ * Ensures that even non-Swing strategy signals are only posted when:
+ *  1. HTF bias (W/D/4H market structure) agrees with the signal direction.
+ *  2. Price is currently inside a valid area of value (≥2 confluence criteria).
+ *
+ * SwingStrategy signals already pass this check internally, so they are
+ * allowed through unconditionally (avoids re-running the same analysis).
+ */
+function passesSwingQualityGate(signal: StrategySignal, mtfData: MultiTimeframeData): boolean {
+  if (signal.strategy === 'Swing') return true; // already validated internally
+
+  try {
+    const bias = analyseMarketStructure(mtfData['1w'], mtfData['1d'], mtfData['4h']);
+    if (bias.confidence === 'LOW' || bias.direction === null) return false;
+    if (bias.direction !== signal.direction) return false;
+
+    const currentPrice = mtfData['4h'][mtfData['4h'].length - 1]?.close;
+    if (!currentPrice) return false;
+
+    const isLong = signal.direction === 'LONG';
+    const zones = findAreasOfValue(mtfData['1w'], mtfData['1d'], mtfData['4h'], currentPrice, isLong);
+    const qualifiedZones = zones.filter((z) => z.confluenceScore >= 2);
+    return qualifiedZones.some((z) => isPriceInZone(currentPrice, z));
+  } catch {
+    return false; // fail closed — don't post if gate errors
+  }
+}
 
 // ─── Last scan summary (read by /status) ─────────────────────────────────────
 
@@ -113,6 +145,7 @@ export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanRe
         signal = { ...signal, asset };
         const weight = getStrategyWeight(strategy.name);
         signal = applyAdaptationWeight(signal, weight);
+        if (!passesSwingQualityGate(signal, mtfData)) continue;
         signals.push(signal);
       } catch {
         // skip failing strategies silently
@@ -390,6 +423,10 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
 
           if (signal.tier === 'NO_TRADE') {
             logger.info(`  ${strategy.name}: score=${signal.score} NO_TRADE${weightNote} — filtered out`);
+            continue;
+          }
+          if (!passesSwingQualityGate(signal, mtfData)) {
+            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — swing gate rejected (no HTF bias + zone confluence)`);
             continue;
           }
           if (isDuplicateSignal(signal)) {
