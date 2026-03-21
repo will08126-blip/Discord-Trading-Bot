@@ -44,46 +44,65 @@ export async function onReady(client: Client): Promise<void> {
     logger.warn('No guild ID found — falling back to global commands (up to 1h propagation)');
   }
 
-  // ── Find or create dedicated bot channel ───────────────────────────────────
-  // The bot manages its own signal channel so you don't have to configure it
-  // manually. On first boot it creates #bot-signals (or BOT_CHANNEL_NAME);
-  // on subsequent boots it reuses the existing channel.
+  // ── Find or create dedicated bot channels ──────────────────────────────────
+  // The bot self-manages two channels on every startup:
+  //   #bot-signals    (BOT_CHANNEL_NAME)   — live trade signals & daily summary
+  //   #paper-trading  (PAPER_CHANNEL_NAME) — paper trade entries, exits, reports
+  // On first boot both are created; on subsequent boots they are reused.
   if (guildId) {
-    const channelName = process.env.BOT_CHANNEL_NAME ?? 'bot-signals';
+    const sigChannelName   = process.env.BOT_CHANNEL_NAME   ?? 'bot-signals';
+    const paperChannelName = process.env.PAPER_CHANNEL_NAME ?? 'paper-trading';
     try {
-      const guild = await client.guilds.fetch(guildId);
+      const guild      = await client.guilds.fetch(guildId);
       const allChannels = await guild.channels.fetch();
 
-      // Look for an existing text channel with our name
-      const existing = allChannels.find(
-        (c): c is TextChannel =>
-          c !== null && c.type === ChannelType.GuildText && c.name === channelName
-      ) as TextChannel | undefined;
-
-      let botChannel: TextChannel;
-      if (existing) {
-        botChannel = existing;
-        logger.info(`Bot channel: reusing existing #${channelName} (${botChannel.id})`);
-      } else {
-        // Create a fresh dedicated channel
-        botChannel = await guild.channels.create({
-          name: channelName,
+      /** Find a GuildText channel by name or create it if absent. */
+      async function findOrCreate(name: string, topic: string): Promise<TextChannel> {
+        const existing = allChannels.find(
+          (c): c is TextChannel =>
+            c !== null && c.type === ChannelType.GuildText && c.name === name
+        ) as TextChannel | undefined;
+        if (existing) {
+          logger.info(`Channel setup: reusing #${name} (${existing.id})`);
+          return existing;
+        }
+        const created = await guild.channels.create({
+          name,
           type: ChannelType.GuildText,
-          topic: '🤖 Trading bot signals, paper trade alerts, and daily summaries — do not post here',
-          reason: 'Discord Trading Bot — auto-created dedicated signal channel',
+          topic,
+          reason: 'Discord Trading Bot — auto-created channel',
         });
-        logger.info(`Bot channel: created #${channelName} (${botChannel.id})`);
+        logger.info(`Channel setup: created #${name} (${created.id})`);
+        return created;
       }
 
-      // Override config so ALL notifications go to this channel
-      config.discord.signalChannelId  = botChannel.id;
-      config.discord.summaryChannelId = botChannel.id;
+      // Create both channels concurrently (one guild fetch, two channel ops)
+      const [sigChannel, paperChannel] = await Promise.all([
+        findOrCreate(
+          sigChannelName,
+          '🤖 Live trading signals and daily market summaries — managed by bot'
+        ),
+        findOrCreate(
+          paperChannelName,
+          '📄 Paper trade entries, exits, P&L, and daily performance reports — managed by bot'
+        ),
+      ]);
+
+      // Wire config — all runtime channel lookups use these IDs
+      config.discord.signalChannelId  = sigChannel.id;
+      config.discord.summaryChannelId = sigChannel.id;
+      config.discord.paperChannelId   = paperChannel.id;
+
     } catch (err) {
-      // Non-fatal — continue with whatever channel ID is in env vars
+      // Non-fatal — fall back to whatever is in env vars
       logger.warn(
-        `Bot channel: could not find/create #${channelName} — ` +
-        `check the bot has Manage Channels permission. Falling back to SIGNAL_CHANNEL_ID. Error: ${err}`
+        `Channel setup failed — check the bot has Manage Channels permission. ` +
+        `Falling back to SIGNAL_CHANNEL_ID for all notifications. Error: ${err}`
       );
+      // If paper channel is still unset use signal channel as fallback
+      if (!config.discord.paperChannelId) {
+        config.discord.paperChannelId = config.discord.signalChannelId;
+      }
     }
   }
 

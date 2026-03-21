@@ -32,6 +32,9 @@ export const config = {
     clientId: requireEnv('DISCORD_CLIENT_ID'),
     signalChannelId: requireEnv('SIGNAL_CHANNEL_ID'),
     summaryChannelId: optionalEnv('SUMMARY_CHANNEL_ID', process.env['SIGNAL_CHANNEL_ID'] ?? ''),
+    // Dedicated paper trading channel — populated at runtime by ready.ts.
+    // Falls back to signalChannelId if the channel cannot be created.
+    paperChannelId: optionalEnv('PAPER_CHANNEL_ID', ''),
   },
 
   anthropic: {

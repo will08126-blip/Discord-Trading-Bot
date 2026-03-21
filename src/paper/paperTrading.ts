@@ -467,6 +467,75 @@ export function getPaperBalanceJourney(): { starting: number; peak: number; curr
   return { starting: state.startingBalance, peak, current: state.virtualBalance };
 }
 
+/**
+ * Lightweight midday heartbeat — posted at noon UTC.
+ * Shows live snapshot: balance, open positions, today's closed trade results so far.
+ * Faster to read than the midnight report; designed for a quick health-check glance.
+ */
+export function buildPaperHeartbeatEmbed() {
+  const state  = loadPaperState();
+  const trades = loadPaperTrades();
+  const open   = trades.filter((t) => t.status === 'active');
+  const today  = new Date().toISOString().slice(0, 10);
+  const todayClosed = trades.filter(
+    (t) => t.status === 'closed' && (t.closeTime ?? '').slice(0, 10) === today
+  );
+  const todayWins   = todayClosed.filter((t) => (t.pnlDollar ?? 0) > 0);
+  const todayPnl    = todayClosed.reduce((s, t) => s + (t.pnlDollar ?? 0), 0);
+  const balanceDiff = state.virtualBalance - state.startingBalance;
+  const balanceSign = balanceDiff >= 0 ? '+' : '';
+  const pnlSign     = todayPnl >= 0 ? '+' : '';
+
+  // Summarise open positions compactly
+  const openLines = open.slice(0, 8).map((t) => {
+    const dir   = t.direction === 'LONG' ? '🟢' : '🔴';
+    const asset = t.asset.split('/')[0];
+    const unrealPct = t.currentPrice && t.entryPrice
+      ? ((t.direction === 'LONG'
+          ? (t.currentPrice - t.entryPrice)
+          : (t.entryPrice - t.currentPrice)) / t.entryPrice * 100).toFixed(1)
+      : '—';
+    return `${dir} ${asset} ${unrealPct}%`;
+  });
+  if (open.length > 8) openLines.push(`…+${open.length - 8} more`);
+
+  const embed = new EmbedBuilder()
+    .setColor(todayPnl >= 0 ? 0x00c8ff : 0xff9944)
+    .setTitle('🕛 Paper Trading Midday Check-in')
+    .addFields(
+      {
+        name: '💰 Account',
+        value: [
+          `Balance: **$${state.virtualBalance.toFixed(2)}** (${balanceSign}$${balanceDiff.toFixed(2)} all-time)`,
+          `Starting: $${state.startingBalance.toFixed(2)}`,
+        ].join('\n'),
+        inline: false,
+      },
+      {
+        name: `📊 Today So Far (${todayClosed.length} closed)`,
+        value: todayClosed.length === 0
+          ? 'No closed trades yet today.'
+          : [
+              `W: ${todayWins.length} / L: ${todayClosed.length - todayWins.length}`,
+              `Net P&L: **${pnlSign}$${todayPnl.toFixed(2)}**`,
+              `Win rate: ${todayClosed.length > 0 ? ((todayWins.length / todayClosed.length) * 100).toFixed(0) : 0}%`,
+            ].join(' · '),
+        inline: false,
+      },
+      {
+        name: `📂 Open Positions (${open.length})`,
+        value: open.length === 0
+          ? 'No open positions.'
+          : openLines.join('\n'),
+        inline: false,
+      }
+    )
+    .setTimestamp()
+    .setFooter({ text: 'Midnight UTC: full daily report · /paper-status for live stats' });
+
+  return { embeds: [embed] };
+}
+
 export function buildDailyPaperReportEmbed(date: string) {
   const trades = loadPaperTrades().filter(
     (t) => t.status === 'closed' && (t.closeTime ?? '').slice(0, 10) === date

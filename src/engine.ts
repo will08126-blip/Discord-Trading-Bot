@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import type { TextChannel } from 'discord.js';
 import { discordClient } from './bot/client';
 import { fetchAllAssets, fetchOHLCV, fetchCurrentPrice } from './data/marketData';
-import { checkPaperPositions, enterPaperTrade, buildDailyPaperReportEmbed } from './paper/paperTrading';
+import { checkPaperPositions, enterPaperTrade, buildDailyPaperReportEmbed, buildPaperHeartbeatEmbed } from './paper/paperTrading';
 import { initializeTopCryptos, refreshTopCryptos } from './data/topCryptos';
 import { detectRegime, isTradeableRegime, setLastRegime, getLastRegimes } from './regime/regimeDetector';
 import { TrendPullbackStrategy } from './strategies/trendPullback';
@@ -45,6 +45,16 @@ import { volumeAverage } from './indicators/indicators';
 import { config } from './config';
 import { logger } from './utils/logger';
 import type { Asset, MultiTimeframeData, RegimeResult, StrategySignal } from './types';
+
+// ─── Paper channel helper ─────────────────────────────────────────────────────
+// All paper trade notifications (entries, exits, reports) go to #paper-trading.
+// Falls back to signalChannelId if paperChannelId is not yet set (e.g. startup race).
+async function getPaperChannel(): Promise<TextChannel | null> {
+  const id = config.discord.paperChannelId || config.discord.signalChannelId;
+  if (!id) return null;
+  const ch = await discordClient.channels.fetch(id).catch(() => null);
+  return ch?.isTextBased() ? (ch as TextChannel) : null;
+}
 
 // Capital-return milestones that trigger profit alerts (fraction of capital).
 // Each milestone fires once and independently — positions get 1–4 profit pings through a big move.
@@ -196,11 +206,14 @@ async function postSignal(signal: StrategySignal) {
   addPendingSignal(signal);
   markSignalSent(signal);
 
-  // Auto-enter paper trade
+  // Auto-enter paper trade — notifications go to the dedicated #paper-trading channel
   if (config.paper.enabled) {
     try {
       const currentPrice = (signal.entryZone[0] + signal.entryZone[1]) / 2;
-      await enterPaperTrade(signal, currentPrice, channel as TextChannel);
+      const paperCh = await getPaperChannel();
+      if (paperCh) {
+        await enterPaperTrade(signal, currentPrice, paperCh);
+      }
     } catch (err) {
       logger.warn('Paper trade entry failed:', err);
     }
@@ -596,63 +609,70 @@ export function startScheduler() {
     logger.info(`Using setInterval for ${interval}-minute scan cadence`);
   }
 
-  // Weekly scalp analysis: every Sunday at midnight UTC (0 0 * * 0)
-  // Runs the 7-day analysis, auto-adjusts scalp_params.json, posts the report + .md attachment
+  // Weekly scalp analysis: every Sunday at midnight UTC — posts to #paper-trading
   cron.schedule('0 0 * * 0', () => {
-    discordClient.channels.fetch(config.discord.signalChannelId)
+    getPaperChannel()
       .then((ch) => {
-        if (ch?.isTextBased()) {
-          postWeeklyScalpReport(ch as TextChannel)
+        if (ch) {
+          postWeeklyScalpReport(ch)
             .catch((err) => logger.error('Weekly scalp report error:', err));
         }
       })
       .catch((err) => logger.error('Weekly scalp report channel fetch error:', err));
   });
 
-  // Daily summary: midnight UTC
-  cron.schedule('0 0 * * *', () => {
-    postDailySummary().catch((err) => logger.error('Unhandled summary error:', err));
-    // Daily paper trading report
-    try {
-      discordClient.channels.fetch(config.discord.signalChannelId).then((ch) => {
-        if (ch?.isTextBased()) {
-          const date = new Date().toISOString().slice(0, 10);
-          (ch as TextChannel).send(buildDailyPaperReportEmbed(date)).catch((err) => {
-            logger.error('Paper daily report error:', err);
-          });
+  // Noon UTC check-in: lightweight midday heartbeat → #paper-trading
+  // Shows live balance, open positions, and today's P&L so far without waiting until midnight.
+  cron.schedule('0 12 * * *', () => {
+    getPaperChannel()
+      .then((ch) => {
+        if (ch) {
+          ch.send(buildPaperHeartbeatEmbed())
+            .catch((err) => logger.error('Paper noon heartbeat error:', err));
         }
-      }).catch((err) => {
-        logger.error('Paper daily report channel fetch error:', err);
-      });
-    } catch (err) {
-      logger.error('Paper daily report error:', err);
-    }
-    // Refresh top cryptos cache
+      })
+      .catch((err) => logger.error('Paper noon heartbeat channel fetch error:', err));
+  });
+
+  // Midnight UTC: full daily paper report → #paper-trading + daily signal summary → #bot-signals
+  cron.schedule('0 0 * * *', () => {
+    // Signal channel: market summary
+    postDailySummary().catch((err) => logger.error('Unhandled summary error:', err));
+
+    // Paper channel: full daily paper report
+    getPaperChannel()
+      .then((ch) => {
+        if (ch) {
+          const date = new Date().toISOString().slice(0, 10);
+          ch.send(buildDailyPaperReportEmbed(date))
+            .catch((err) => logger.error('Paper daily report error:', err));
+        }
+      })
+      .catch((err) => logger.error('Paper daily report channel fetch error:', err));
+
+    // Refresh top cryptos cache for next day
     refreshTopCryptos().catch((err) => logger.error('Top cryptos refresh error:', err));
   });
 
   // Scalp position monitoring — every 90s
+  // Scalp position monitoring — every 90s (closes go to #paper-trading)
   const scalpIntervalMs = config.monitoring.scalpIntervalSeconds * 1000;
   setInterval(async () => {
     try {
-      const ch = await discordClient.channels.fetch(config.discord.signalChannelId).catch(() => null);
-      if (!ch?.isTextBased()) return;
-      const tc = ch as TextChannel;
-      // Monitor paper scalp positions
+      const tc = await getPaperChannel();
+      if (!tc) return;
       await checkPaperPositions(tc);
     } catch (err) {
       logger.error('Scalp monitoring loop error:', err);
     }
   }, scalpIntervalMs);
 
-  // Swing position monitoring — every 20 min
+  // Swing position monitoring — every 20 min (closes go to #paper-trading)
   const swingIntervalMs = config.monitoring.swingIntervalSeconds * 1000;
   setInterval(async () => {
     try {
-      const ch = await discordClient.channels.fetch(config.discord.signalChannelId).catch(() => null);
-      if (!ch?.isTextBased()) return;
-      const tc = ch as TextChannel;
-      // Monitor paper swing positions
+      const tc = await getPaperChannel();
+      if (!tc) return;
       await checkPaperPositions(tc);
     } catch (err) {
       logger.error('Swing monitoring loop error:', err);

@@ -51,10 +51,13 @@ services:
       - key: COINGECKO_API_KEY
         sync: false
       # Bot channel management
-      # BOT_CHANNEL_NAME: the bot will find or create this channel in your server on startup.
-      # All signals, alerts, and summaries will be sent here automatically.
+      # BOT_CHANNEL_NAME:   the bot creates/reuses this channel for live trade signals & daily summaries.
+      # PAPER_CHANNEL_NAME: the bot creates/reuses this channel for paper trade entries, exits & reports.
+      # Both channels are created automatically on first boot — no manual setup needed.
       - key: BOT_CHANNEL_NAME
         value: "bot-signals"
+      - key: PAPER_CHANNEL_NAME
+        value: "paper-trading"
       # COINBASE_FILTER: set to "false" to signal on all top-20 cryptos regardless of exchange listing.
       # Default "true" restricts signals to coins available on Coinbase (BASE app compatible).
       - key: COINBASE_FILTER
