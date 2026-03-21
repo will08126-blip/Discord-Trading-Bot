@@ -11,7 +11,7 @@ const { default: YahooFinance } = require('yahoo-finance2');
 import type { OHLCV, Asset, Timeframe } from '../types';
 import { logger } from '../utils/logger';
 
-const yahooFinance = new YahooFinance();
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 /** Assets sourced from Yahoo Finance instead of CCXT crypto exchanges */
 const YAHOO_ASSETS = new Set<Asset>(['XAU/USD', 'XAG/USD', 'QQQ/USD', 'SPY/USD']);
@@ -102,7 +102,10 @@ export async function fetchYahooOHLCV(
   });
 
   if (!result?.quotes?.length) {
-    throw new Error(`Yahoo Finance returned no data for ${symbol} ${yahooInterval}`);
+    // Market may be closed (e.g. QQQ/SPY on weekends, or 1m outside trading hours).
+    // Return empty array — the caller (fetchMultiTimeframe) handles this gracefully.
+    logger.debug(`[yahooFinance] No data for ${symbol} ${yahooInterval} — market likely closed`);
+    return [];
   }
 
   // Map Yahoo's quote shape to our OHLCV interface

@@ -1,35 +1,48 @@
 /**
- * ScalpFVG Strategy — Fair Value Gap + MACD Crossover Scalp
+ * ScalpFVG Strategy — Multi-Confluence Scalp
  *
- * Entry logic (3-layer confluence):
- *   1. FAIR VALUE GAP  — an unfilled imbalance zone on 1m (primary) or 5m (backup)
- *      is present near current price, confirming a supply/demand imbalance.
+ * Entry requires ALL of these layers (paper trading auto-enters everything ≥ 45 pts):
  *
- *   2. MACD CROSSOVER  — 5m MACD(5,13,3) line has just crossed above (LONG) or
- *      below (SHORT) the signal line, confirming momentum direction.
+ *   LAYER 1 — FVG ZONE  (Fair Value Gap on 1m or 5m)
+ *     An unfilled imbalance near current price confirms supply/demand imbalance.
  *
- *   3. MTF TREND FILTER — 5m EMA8 > EMA21 (LONG) or < EMA21 (SHORT),
- *      ensuring we trade with the short-term trend, not against it.
+ *   LAYER 2 — MACD MOMENTUM  (fast 5,13,3 on 5m)
+ *     MACD crossover or recent cross (within 3 bars) confirms direction.
  *
- * Stop placement: below/above the FVG zone low/high ± 0.5×ATR(1m).
- * Target: 3.5R (SCALP) or 2.5R (HYBRID) depending on stop distance.
- * Leverage: 50–80x (regime + score gated).
+ *   LAYER 3 — EMA TREND FILTER  (8/21 EMA on 5m + 15m)
+ *     At least one TF must agree with direction; both agreeing = higher score.
  *
- * Operates in ALL regimes — scalp FVGs form in any market condition.
- * Score gate: 35 (lower than other strategies — quantity over quality,
- * let the paper engine gather data to refine this threshold over time).
+ *   LAYER 4 — VWAP FILTER  (session VWAP on 5m)
+ *     Price above VWAP = long bias; price below VWAP = short bias.
+ *     Eliminates counter-VWAP trades that tend to chop.
+ *
+ *   LAYER 5 — BOLLINGER BAND CONTEXT  (20-period 2σ on 5m)
+ *     BB squeeze before entry = compression about to release (high probability).
+ *     Price at band + FVG = highest quality entry zone.
+ *
+ *   LAYER 6 — VOLUME CONFIRMATION
+ *     Volume spike or above-average volume required.
+ *
+ * Score gate: ≥ 45 / 100 for paper trading.
+ * High-quality scalps (HYBRID type) still post to #bot-signals when score ≥ 65.
+ *
+ * Stop: beyond FVG zone + 0.5×ATR(1m).
+ * Target: 4×R (SCALP) or 3×R (HYBRID).
+ * Leverage: managed by scalp params file (adaptive).
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { BaseStrategy } from './base';
-import { cachedAtr, cachedRsi, cachedMacd, cachedFVGs, cachedEmaQuickTrend } from '../indicators/cache';
-import { isVolumeSpike, sessionQualityScore, volumeAverage } from '../indicators/indicators';
-import { isPriceInFVG } from '../indicators/indicators';
+import {
+  cachedAtr, cachedRsi, cachedMacd, cachedFVGs, cachedEmaQuickTrend, cachedVwap, cachedBollinger,
+} from '../indicators/cache';
+import {
+  isVolumeSpike, sessionQualityScore, volumeAverage, isPriceInFVG,
+} from '../indicators/indicators';
 import type { StrategySignal, MultiTimeframeData, Regime, ScoreTier, TradeType } from '../types';
 
 export class ScalpFVGStrategy extends BaseStrategy {
   readonly name = 'Scalp FVG';
-  // Operates in all regimes — FVGs appear in trending AND ranging markets
   readonly supportedRegimes: Regime[] = [
     'TREND_UP', 'TREND_DOWN', 'RANGE', 'VOL_EXPANSION', 'LOW_VOL_COMPRESSION',
   ];
@@ -41,7 +54,7 @@ export class ScalpFVGStrategy extends BaseStrategy {
     const candles5m  = data['5m'];
     const candles15m = data['15m'];
 
-    if (!candles1m || candles1m.length < 30) return null;
+    if (!candles1m  || candles1m.length  < 30) return null;
     if (!candles5m  || candles5m.length  < 30) return null;
     if (!candles15m || candles15m.length < 20) return null;
 
@@ -49,211 +62,222 @@ export class ScalpFVGStrategy extends BaseStrategy {
     const n5 = candles5m.length  - 1;
     const currentPrice = candles1m[n1].close;
 
-    // ── Layer 1: Fair Value Gap detection ─────────────────────────────────────
-    // Primary: 1m FVGs (most recent price imbalances)
+    // ── Layer 1: Fair Value Gap ───────────────────────────────────────────────
     const fvgs1m = cachedFVGs(candles1m, 8);
-    // Backup: 5m FVGs (larger, more significant zones)
     const fvgs5m = cachedFVGs(candles5m, 5);
 
-    // Find nearest unfilled FVG within 1.5% of current price
     const PROXIMITY_PCT = 0.015;
-    const nearbyBullish1m = fvgs1m.filter(
-      (z) => z.type === 'BULLISH' &&
-      Math.abs(z.midpoint - currentPrice) / currentPrice <= PROXIMITY_PCT
-    );
-    const nearbyBearish1m = fvgs1m.filter(
-      (z) => z.type === 'BEARISH' &&
-      Math.abs(z.midpoint - currentPrice) / currentPrice <= PROXIMITY_PCT
-    );
-    const nearbyBullish5m = fvgs5m.filter(
-      (z) => z.type === 'BULLISH' &&
-      Math.abs(z.midpoint - currentPrice) / currentPrice <= PROXIMITY_PCT
-    );
-    const nearbyBearish5m = fvgs5m.filter(
-      (z) => z.type === 'BEARISH' &&
-      Math.abs(z.midpoint - currentPrice) / currentPrice <= PROXIMITY_PCT
-    );
+    const nearBull1m = fvgs1m.filter((z) => z.type === 'BULLISH' && Math.abs(z.midpoint - currentPrice) / currentPrice <= PROXIMITY_PCT);
+    const nearBear1m = fvgs1m.filter((z) => z.type === 'BEARISH' && Math.abs(z.midpoint - currentPrice) / currentPrice <= PROXIMITY_PCT);
+    const nearBull5m = fvgs5m.filter((z) => z.type === 'BULLISH' && Math.abs(z.midpoint - currentPrice) / currentPrice <= PROXIMITY_PCT);
+    const nearBear5m = fvgs5m.filter((z) => z.type === 'BEARISH' && Math.abs(z.midpoint - currentPrice) / currentPrice <= PROXIMITY_PCT);
 
-    // Pick the nearest FVG zone for each direction
-    const bestBullFVG = [...nearbyBullish1m, ...nearbyBullish5m]
+    const bestBullFVG = [...nearBull1m, ...nearBull5m]
       .sort((a, b) => Math.abs(a.midpoint - currentPrice) - Math.abs(b.midpoint - currentPrice))[0];
-    const bestBearFVG = [...nearbyBearish1m, ...nearbyBearish5m]
+    const bestBearFVG = [...nearBear1m, ...nearBear5m]
       .sort((a, b) => Math.abs(a.midpoint - currentPrice) - Math.abs(b.midpoint - currentPrice))[0];
 
-    if (!bestBullFVG && !bestBearFVG) return null; // no nearby FVG — skip
+    if (!bestBullFVG && !bestBearFVG) return null;
 
-    // ── Layer 2: MACD crossover on 5m (fast params for scalp) ────────────────
-    const macd5m = cachedMacd(candles5m, 5, 13, 3);
+    // ── Layer 2: MACD crossover on 5m (fast scalp params) ────────────────────
+    const macd5m     = cachedMacd(candles5m, 5, 13, 3);
     const macdLine   = macd5m.macdLine;
     const signalLine = macd5m.signalLine;
 
-    const macdNow   = macdLine[n5];
-    const macdPrev  = macdLine[n5 - 1];
-    const sigNow    = signalLine[n5];
-    const sigPrev   = signalLine[n5 - 1];
+    const macdNow  = macdLine[n5];
+    const macdPrev = macdLine[n5 - 1];
+    const sigNow   = signalLine[n5];
+    const sigPrev  = signalLine[n5 - 1];
 
     if (isNaN(macdNow) || isNaN(macdPrev) || isNaN(sigNow) || isNaN(sigPrev)) return null;
 
-    // Crossover: MACD crossed signal line in the last 1–2 bars
-    const bullishCross = macdPrev <= sigPrev && macdNow > sigNow;  // just crossed up
-    const bearishCross = macdPrev >= sigPrev && macdNow < sigNow;  // just crossed down
-    // Recent cross (within 3 bars) — avoids missing the exact bar
+    const bullishCross   = macdPrev <= sigPrev && macdNow > sigNow;
+    const bearishCross   = macdPrev >= sigPrev && macdNow < sigNow;
+
+    // Recent cross within 3 bars
     const recentBullCross = (() => {
       for (let i = 1; i <= 3; i++) {
-        const mi = macdLine[n5 - i];
-        const si = signalLine[n5 - i];
-        const mp = macdLine[n5 - i - 1];
-        const sp = signalLine[n5 - i - 1];
+        const mi = macdLine[n5 - i]; const si = signalLine[n5 - i];
+        const mp = macdLine[n5 - i - 1]; const sp = signalLine[n5 - i - 1];
         if (!isNaN(mi) && !isNaN(si) && !isNaN(mp) && !isNaN(sp) && mp <= sp && mi > si) return true;
       }
       return false;
     })();
     const recentBearCross = (() => {
       for (let i = 1; i <= 3; i++) {
-        const mi = macdLine[n5 - i];
-        const si = signalLine[n5 - i];
-        const mp = macdLine[n5 - i - 1];
-        const sp = signalLine[n5 - i - 1];
+        const mi = macdLine[n5 - i]; const si = signalLine[n5 - i];
+        const mp = macdLine[n5 - i - 1]; const sp = signalLine[n5 - i - 1];
         if (!isNaN(mi) && !isNaN(si) && !isNaN(mp) && !isNaN(sp) && mp >= sp && mi < si) return true;
       }
       return false;
     })();
 
-    const macdBull = bullishCross  || recentBullCross;
-    const macdBear = bearishCross  || recentBearCross;
+    const macdBull = bullishCross || recentBullCross;
+    const macdBear = bearishCross || recentBearCross;
 
-    // ── Layer 3: MTF trend filter (5m + 15m EMA8/21) ──────────────────────────
+    // ── Layer 3: MTF EMA 8/21 trend filter ───────────────────────────────────
     const trend5m  = cachedEmaQuickTrend(candles5m,  8, 21);
     const trend15m = cachedEmaQuickTrend(candles15m, 8, 21);
 
-    // At least one timeframe must agree; both agreeing = higher score
     const bullTrend = trend5m === 'UP'   || trend15m === 'UP';
     const bearTrend = trend5m === 'DOWN' || trend15m === 'DOWN';
     const bothBull  = trend5m === 'UP'   && trend15m === 'UP';
     const bothBear  = trend5m === 'DOWN' && trend15m === 'DOWN';
 
+    // ── Layer 4: VWAP filter ──────────────────────────────────────────────────
+    const vwapVals5m   = cachedVwap(candles5m);
+    const vwapNow      = vwapVals5m[n5];
+    const vwapBullish  = !isNaN(vwapNow) && currentPrice > vwapNow;
+    const vwapBearish  = !isNaN(vwapNow) && currentPrice < vwapNow;
+    const vwapConflict = isNaN(vwapNow); // unknown — treat as neutral, not blocking
+
+    // ── Layer 5: Bollinger Band context on 5m ─────────────────────────────────
+    const bb5m       = cachedBollinger(candles5m, 20, 2);
+    const bbUpper    = bb5m.upper[n5];
+    const bbLower    = bb5m.lower[n5];
+    const bbWidth    = bb5m.width[n5];
+    const recentBBWidths = bb5m.width.slice(-20).filter((w) => !isNaN(w));
+    const minBBWidth = recentBBWidths.length > 0 ? Math.min(...recentBBWidths) : Infinity;
+    const bbSqueeze  = !isNaN(bbWidth) && bbWidth <= minBBWidth * 1.05;
+    const bbRange    = (!isNaN(bbUpper) && !isNaN(bbLower)) ? bbUpper - bbLower : 0;
+    const touchZone  = bbRange * 0.08;
+    const atBBLower  = !isNaN(bbLower) && currentPrice <= bbLower + touchZone;
+    const atBBUpper  = !isNaN(bbUpper) && currentPrice >= bbUpper - touchZone;
+
+    // ── Layer 6: Volume ───────────────────────────────────────────────────────
+    const volSpike  = isVolumeSpike(candles5m.slice(-20), 1.2);
+    const volAvg5m  = volumeAverage(candles5m, 20);
+    const lastVol5m = candles5m[n5].volume;
+    const volRatio  = volAvg5m > 0 ? lastVol5m / volAvg5m : 1;
+    const goodVol   = volRatio >= 0.9; // at least 90% of average (crypto markets always active)
+
     // ── Direction resolution ──────────────────────────────────────────────────
     let isLong: boolean;
     let fvgZone: typeof bestBullFVG;
 
-    if (bestBullFVG && macdBull && bullTrend && !bestBearFVG) {
+    const longOk  = Boolean(bestBullFVG && macdBull && bullTrend && (vwapBullish || vwapConflict));
+    const shortOk = Boolean(bestBearFVG && macdBear && bearTrend && (vwapBearish || vwapConflict));
+
+    if (longOk && !shortOk) {
       isLong  = true;
       fvgZone = bestBullFVG;
-    } else if (bestBearFVG && macdBear && bearTrend && !bestBullFVG) {
+    } else if (shortOk && !longOk) {
       isLong  = false;
       fvgZone = bestBearFVG;
-    } else if (bestBullFVG && macdBull && bullTrend) {
-      isLong  = true;
-      fvgZone = bestBullFVG;
-    } else if (bestBearFVG && macdBear && bearTrend) {
-      isLong  = false;
-      fvgZone = bestBearFVG;
+    } else if (longOk && shortOk) {
+      // Conflicting signals — prefer the direction with the nearest FVG
+      const dBull = Math.abs((bestBullFVG?.midpoint ?? 0) - currentPrice);
+      const dBear = Math.abs((bestBearFVG?.midpoint ?? 0) - currentPrice);
+      isLong  = dBull <= dBear;
+      fvgZone = isLong ? bestBullFVG : bestBearFVG;
     } else {
       return null; // no valid direction
     }
 
     if (!fvgZone) return null;
 
-    // ── Price must be IN or touching the FVG zone (entry on retest) ───────────
-    const inZone = isPriceInFVG(currentPrice, fvgZone, 0.003);
-    // Also allow entry if price is approaching the zone within 0.3%
+    // Price must be in or approaching the FVG zone
+    const inZone    = isPriceInFVG(currentPrice, fvgZone, 0.003);
     const approaching = Math.abs(currentPrice - fvgZone.midpoint) / currentPrice < 0.005;
     if (!inZone && !approaching) return null;
 
-    // ── Stop Loss: beyond the FVG zone + ATR buffer ───────────────────────────
+    // ── RSI overextension guard ───────────────────────────────────────────────
+    const rsi5m = cachedRsi(candles5m, 14)[n5];
+    if (!isNaN(rsi5m)) {
+      if (isLong  && rsi5m > 80) return null; // overbought — skip
+      if (!isLong && rsi5m < 20) return null; // oversold   — skip
+    }
+
+    // ── Stop Loss & Take Profit ───────────────────────────────────────────────
     const atr1m = cachedAtr(candles1m, 14)[n1];
     if (isNaN(atr1m) || atr1m <= 0) return null;
 
     const stopLoss = isLong
-      ? fvgZone.gapLow  - atr1m * 0.5   // below the FVG zone
-      : fvgZone.gapHigh + atr1m * 0.5;  // above the FVG zone
+      ? fvgZone.gapLow  - atr1m * 0.5
+      : fvgZone.gapHigh + atr1m * 0.5;
 
-    const entryMid = currentPrice;
-    const stopDist = Math.abs(entryMid - stopLoss);
+    const stopDist = Math.abs(currentPrice - stopLoss);
     if (stopDist <= 0) return null;
 
-    const stopPct: number = stopDist / entryMid;
+    const stopPct: number   = stopDist / currentPrice;
     const tradeType: TradeType = stopPct < 0.003 ? 'SCALP' : 'HYBRID';
-    const rrMultiplier = tradeType === 'SCALP' ? 4.0 : 3.0;
+    const rrMult = tradeType === 'SCALP' ? 4.0 : 3.0;
 
     const takeProfit = isLong
-      ? entryMid + stopDist * rrMultiplier
-      : entryMid - stopDist * rrMultiplier;
+      ? currentPrice + stopDist * rrMult
+      : currentPrice - stopDist * rrMult;
 
-    const entryLow  = entryMid * 0.9995;
-    const entryHigh = entryMid * 1.0005;
+    const entryLow  = currentPrice * 0.9995;
+    const entryHigh = currentPrice * 1.0005;
 
     // ── Scoring ───────────────────────────────────────────────────────────────
     const components = this.zeroComponents();
 
-    // HTF alignment (0-20): both timeframes agree = max
+    // HTF alignment (0–20): EMA agreement across timeframes
     components.htfAlignment = bothBull || bothBear ? 20 : 12;
 
-    // Setup quality (0-20): FVG strength + price inside zone
-    const fvgStrengthScore = Math.min(12, Math.round(fvgZone.strength * 10000));
-    components.setupQuality = fvgStrengthScore + (inZone ? 8 : 4);
+    // Setup quality (0–20): FVG quality + price inside zone + BB context
+    const fvgScore    = Math.min(10, Math.round(fvgZone.strength * 10000));
+    const bbBonus     = bbSqueeze ? 5 : (atBBLower || atBBUpper) ? 3 : 0;
+    components.setupQuality = Math.min(20, fvgScore + (inZone ? 8 : 4) + bbBonus - (inZone ? 2 : 0)); // fvgScore + zone + bb
 
-    // Momentum (0-15): MACD histogram and crossover freshness
-    const hist = macd5m.histogram[n5];
+    // Momentum (0–15): MACD freshness + histogram
+    const hist     = macd5m.histogram[n5];
     const histPrev = macd5m.histogram[n5 - 1];
     const histGrowing = isLong
       ? !isNaN(hist) && !isNaN(histPrev) && hist > histPrev
       : !isNaN(hist) && !isNaN(histPrev) && hist < histPrev;
     components.momentum = (bullishCross || bearishCross) ? 15 : histGrowing ? 10 : 6;
 
-    // Volatility quality (0-10): ATR in a healthy range (not too spiky)
-    const atr5m = cachedAtr(candles5m, 14)[n5];
-    const avgAtr5m = atr5m / (candles5m[n5].close * 0.005); // ratio to 0.5% move
-    components.volatilityQuality = Math.min(10, Math.round(10 - Math.abs(avgAtr5m - 1) * 3));
+    // Volatility quality (0–10): BB context + ATR health
+    const atr5m     = cachedAtr(candles5m, 14)[n5];
+    const atrRatio  = atr5m / (candles5m[n5].close * 0.005);
+    const atrScore  = Math.min(7, Math.round(7 - Math.abs(atrRatio - 1) * 2));
+    components.volatilityQuality = Math.min(10, atrScore + (bbSqueeze ? 3 : 0));
 
-    // Regime fit (0-10): trending regimes better for directional scalps
+    // Regime fit (0–10)
     const trendingRegime = regime === 'TREND_UP' || regime === 'TREND_DOWN' || regime === 'VOL_EXPANSION';
     components.regimeFit = trendingRegime ? 10 : 6;
 
-    // Liquidity (0-10): volume check
-    const volSpike = isVolumeSpike(candles5m.slice(-20), 1.3);
-    const volAvg = volumeAverage(candles5m, 20);
-    const lastVol = candles5m[n5].volume;
-    const volRatio = volAvg > 0 ? lastVol / volAvg : 1;
-    components.liquidity = volSpike ? 10 : Math.min(10, Math.round(volRatio * 6));
+    // Liquidity (0–10): VWAP alignment + volume
+    const vwapScore = vwapConflict ? 5 : (isLong ? (vwapBullish ? 4 : 1) : (vwapBearish ? 4 : 1));
+    components.liquidity = Math.min(10, Math.round(volRatio * 4) + vwapScore + (volSpike ? 2 : 0));
 
-    // Slippage (0-5): tight spread on 1m
+    // Slippage (0–5): tight 1m spread
     const spread1m = candles1m[n1].high - candles1m[n1].low;
     components.slippageRisk = spread1m < atr1m * 1.5 ? 5 : 3;
 
-    // Session quality (0-5)
+    // Session (0–5)
     components.sessionQuality = sessionQualityScore();
 
-    // Recent performance: neutral (adaptation engine will update)
+    // Recent performance baseline
     components.recentPerformance = 3;
 
-    // RSI check — avoid severely overextended entries
-    const rsi5m = cachedRsi(candles5m, 14)[n5];
-    if (!isNaN(rsi5m)) {
-      if (isLong  && rsi5m > 80) return null; // overbought — skip bull FVG entry
-      if (!isLong && rsi5m < 20) return null; // oversold   — skip bear FVG entry
-    }
-
     const score = this.totalScore(components);
+
+    // Scalp gate: 45 minimum; hybrids that score ≥ 65 get posted to #bot-signals
     const tier: ScoreTier =
       score >= 80 ? 'ELITE' :
       score >= 60 ? 'STRONG' :
-      score >= 35 ? 'MEDIUM' :  // lower gate — FVGs are high-probability at any score
+      score >= 45 ? 'MEDIUM' :
       'NO_TRADE';
 
     if (tier === 'NO_TRADE') return null;
+    if (!goodVol && tier === 'MEDIUM') return null; // low-volume MEDIUMs → skip
 
-    // Build notes string for the embed
-    const macdStr   = bullishCross || bearishCross ? 'fresh cross' : 'recent cross';
-    const fvgSource = nearbyBullish1m.length > 0 || nearbyBearish1m.length > 0 ? '1m' : '5m';
-    const trend15mStr = trend15m !== 'NEUTRAL' ? ` 15m:${trend15m}` : '';
-    const rsiStr    = !isNaN(rsi5m) ? ` RSI5m=${rsi5m.toFixed(0)}` : '';
-    const notes = `FVG(${fvgSource}) ${fvgZone.type} zone=$${fvgZone.gapLow.toFixed(4)}–$${fvgZone.gapHigh.toFixed(4)} | MACD ${macdStr} 5m:${trend5m}${trend15mStr}${rsiStr} [${tradeType}]`;
+    // ── Notes ─────────────────────────────────────────────────────────────────
+    const macdStr    = (bullishCross || bearishCross) ? 'fresh cross' : 'recent cross';
+    const fvgSrc     = nearBull1m.length > 0 || nearBear1m.length > 0 ? '1m' : '5m';
+    const vwapStr    = vwapConflict ? '' : ` VWAP:${vwapBullish ? '↑' : '↓'}`;
+    const bbStr      = bbSqueeze ? ' BB⚡Squeeze' : (atBBLower || atBBUpper) ? ' BB Band' : '';
+    const rsiStr     = !isNaN(rsi5m) ? ` RSI=${rsi5m.toFixed(0)}` : '';
+    const trendStr   = `5m:${trend5m} 15m:${trend15m}`;
+    const notes = `FVG(${fvgSrc}) zone=$${fvgZone.gapLow.toFixed(4)}–$${fvgZone.gapHigh.toFixed(4)} | MACD ${macdStr} ${trendStr}${vwapStr}${bbStr}${rsiStr} [${tradeType}]`;
 
     return {
-      id: uuidv4(),
-      strategy: this.name,
-      asset: data.asset,
+      id:        uuidv4(),
+      strategy:  this.name,
+      asset:     data.asset,
       direction: isLong ? 'LONG' : 'SHORT',
       tradeType,
       entryZone: [entryLow, entryHigh],

@@ -9,8 +9,8 @@
  * Usage — swap `ema(candles, 20)` for `cachedEma(candles, 20)` etc.
  */
 import type { OHLCV } from '../types';
-import { ema, rsi, atr, atrAverage, vwap, macd, detectFVGs, emaQuickTrend } from './indicators';
-import type { MACDResult, FVGZone } from './indicators';
+import { ema, rsi, atr, atrAverage, vwap, macd, detectFVGs, emaQuickTrend, bollinger } from './indicators';
+import type { MACDResult, FVGZone, BollingerResult } from './indicators';
 
 const store = new WeakMap<OHLCV[], Map<string, unknown>>();
 
@@ -60,3 +60,10 @@ export const cachedEmaQuickTrend = (
   slow = 21,
 ): 'UP' | 'DOWN' | 'NEUTRAL' =>
   get(candles, `emaQt_${fast}_${slow}`, () => emaQuickTrend(candles, fast, slow));
+
+export const cachedBollinger = (
+  candles: OHLCV[],
+  period = 20,
+  stdDev = 2,
+): BollingerResult =>
+  get(candles, `bb_${period}_${stdDev}`, () => bollinger(candles, period, stdDev));

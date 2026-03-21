@@ -70,6 +70,7 @@ function toOHLCV(raw: any[][]): OHLCV[] {
 }
 
 function checkStaleness(candles: OHLCV[], timeframe: Timeframe): void {
+  if (candles.length === 0) return; // empty = market closed, already logged upstream
   const staleThreshold = config.engine.staleThresholds[timeframe];
   const lastCandle = candles[candles.length - 1];
   const age = Date.now() - lastCandle.time;
@@ -108,23 +109,33 @@ export async function fetchOHLCV(
 }
 
 export async function fetchMultiTimeframe(asset: Asset): Promise<MultiTimeframeData> {
-  const [tf1w, tf1d, tf4h, tf15m, tf5m, tf1m] = await Promise.all([
-    fetchOHLCV(asset, '1w'),
-    fetchOHLCV(asset, '1d'),
-    fetchOHLCV(asset, '4h'),
-    fetchOHLCV(asset, '15m'),
-    fetchOHLCV(asset, '5m'),
-    fetchOHLCV(asset, '1m'),
-  ]);
+  const TFS = ['1w', '1d', '4h', '15m', '5m', '1m'] as const;
+
+  const results = await Promise.allSettled(
+    TFS.map((tf) => fetchOHLCV(asset, tf))
+  );
+
+  const data: Record<string, OHLCV[]> = {};
+  for (let i = 0; i < TFS.length; i++) {
+    const r = results[i];
+    if (r.status === 'fulfilled') {
+      data[TFS[i]] = r.value;
+    } else {
+      // Timeframe unavailable (e.g. 1m for equities outside market hours) — use empty array.
+      // Each strategy checks candles.length < minimum and returns null gracefully.
+      logger.debug(`[fetchMultiTimeframe] ${asset} ${TFS[i]} unavailable: ${(r as PromiseRejectedResult).reason?.message ?? r.reason}`);
+      data[TFS[i]] = [];
+    }
+  }
 
   return {
     asset,
-    '1w':  tf1w,
-    '1d':  tf1d,
-    '4h':  tf4h,
-    '15m': tf15m,
-    '5m':  tf5m,
-    '1m':  tf1m,
+    '1w':  data['1w'],
+    '1d':  data['1d'],
+    '4h':  data['4h'],
+    '15m': data['15m'],
+    '5m':  data['5m'],
+    '1m':  data['1m'],
   };
 }
 
