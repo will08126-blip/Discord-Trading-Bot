@@ -92,6 +92,7 @@ export const config = {
     stateFile: path.join(process.cwd(), 'data', 'state.json'),
     paperTradesFile: path.join(process.cwd(), 'data', 'paper_trades.json'),
     paperStateFile: path.join(process.cwd(), 'data', 'paper_state.json'),
+    blownAccountsFile: path.join(process.cwd(), 'data', 'blown_accounts.json'),
     topCryptosCache: path.join(process.cwd(), 'data', 'top_cryptos_cache.json'),
     logsDir: path.join(process.cwd(), 'logs'),
   },

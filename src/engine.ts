@@ -222,7 +222,14 @@ async function postSignal(signal: StrategySignal) {
   // Auto-enter paper trade for ALL signal types — notifications → #paper-trading
   if (config.paper.enabled) {
     try {
-      const currentPrice = (signal.entryZone[0] + signal.entryZone[1]) / 2;
+      // Fetch live price for realistic entry simulation.
+      // Falls back to entryZone midpoint if the price fetch fails (e.g. market closed).
+      // For SCALP signals, paperTrading.ts will use signal.entryZone[0] as the limit
+      // price regardless — the currentPrice here is only used for SWING/HYBRID
+      // immediate entries and for metadata capture.
+      const currentPrice = await fetchCurrentPrice(signal.asset as Asset).catch(
+        () => (signal.entryZone[0] + signal.entryZone[1]) / 2
+      );
       const paperCh = await getPaperChannel();
       if (paperCh) {
         await enterPaperTrade(signal, currentPrice, paperCh);

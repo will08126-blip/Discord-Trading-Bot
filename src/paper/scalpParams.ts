@@ -59,32 +59,33 @@ export interface AdjustmentRecord {
   newValue: unknown;
 }
 
-// ─── Defaults — aggressive, let data decide ──────────────────────────────────
+// ─── Defaults — AGGRESSIVE STRESS-TEST MODE ──────────────────────────────────
+// The user explicitly wants to stress-test the strategy by running it more
+// aggressively. Losing the $1,000 is acceptable — the goal is to surface
+// weaknesses fast. We lower score gates and dedup windows so more signals
+// reach paper trading. #bot-signals (SWING/HYBRID only) stays clean because
+// scalp signals never post there regardless of this score gate.
 
 export const DEFAULT_SCALP_PARAMS: ScalpParams = {
-  // Score gates — data-driven from first live session (2026-03-21):
-  // win/loss score spread was only 1.2 pts at gate=52, meaning low quality signals
-  // were passing. Raised to 62 to require genuine multi-layer confluence.
-  // Hybrid (posted to #bot-signals) requires 68+ to keep that channel clean.
-  minScoreScalp: 62,
+  // Score gate: lowered to 55 for aggressive stress-testing.
+  // More signals through = more data faster = faster learning.
+  // Hybrid keeps 68 to protect the #bot-signals manual-trading channel.
+  minScoreScalp: 55,
   minScoreHybrid: 68,
   bypassSwingGateForScalps: true,
   allowedRegimes: ['TREND_UP', 'TREND_DOWN', 'RANGE', 'VOL_EXPANSION', 'LOW_VOL_COMPRESSION'],
 
-  riskPerTradePct: 0.02,
+  riskPerTradePct: 0.05,     // aggressive: 5% risk per trade (managed in paperTrading.ts constants)
   leverageMultiplier: 1.0,
-  maxConcurrentScalps: 2,    // reduced from 4 — 4 concurrent scalps created too much simultaneous exposure
+  maxConcurrentScalps: 4,    // aggressive: up to 4 concurrent paper positions
 
-  dedupWindowMinutes: 45,    // up from 20 — 20min was near-no-filter on volatile crypto; 45 forces spacing
+  dedupWindowMinutes: 15,    // aggressive: 15min cooldown — re-enter fast after losses
 
   sessionFilterEnabled: false,
   allowedHoursUTC: [],
 
   // Asset weights: 0.0 = completely skip this asset.
-  // BONK and HYPE both ran 0% win rate across 8 combined trades on day 1.
-  // BONK is a meme coin with irrational weekend moves; HYPE is a new token
-  // with thin weekend liquidity. Both suppressed until weekly auto-adjuster
-  // re-enables them if they show improvement.
+  // BONK and HYPE ran 0% win rate on day 1. Keep suppressed for now.
   assetWeights: {
     'BONK/USDT': 0,
     'HYPE/USDT': 0,
@@ -131,26 +132,30 @@ export function saveScalpParams(params: ScalpParams): void {
 // ─── Initialise with defaults if file doesn't exist ──────────────────────────
 
 /**
- * Wipe the on-disk scalp_params.json if its minScoreScalp is below the new
- * minimum floor (52). This forces a one-time reset to the updated defaults
- * without requiring a manual file edit on the server.
+ * Wipe the on-disk scalp_params.json if it contains stale conservative values
+ * that conflict with the current aggressive stress-test defaults.
+ * This forces a one-time reset without requiring a manual server edit.
+ *
+ * Stale conditions (conservative values that need to be replaced):
+ *   - minScoreScalp > 60  (was raised to 62 after day-1, now lowered back to 55 for stress test)
+ *   - maxConcurrentScalps < 4  (was reduced to 2, now back to 4 for stress test)
+ *   - dedupWindowMinutes > 20  (was raised to 45, now 15 for aggressive re-entry)
  */
 export function resetStaleScalpParams(): void {
   try {
     if (!fs.existsSync(PARAMS_FILE)) return;
     const raw = fs.readFileSync(PARAMS_FILE, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<ScalpParams>;
-    // Reset if score gate or concurrent limit are below the new minimums from day-1 analysis.
-    // This forces a one-time reset to updated defaults without a manual server edit.
-    const scoreStale = typeof parsed.minScoreScalp === 'number' && parsed.minScoreScalp < 62;
-    const concStale  = typeof parsed.maxConcurrentScalps === 'number' && parsed.maxConcurrentScalps > 2;
-    const dedupStale = typeof parsed.dedupWindowMinutes === 'number' && parsed.dedupWindowMinutes < 45;
+    // Wipe if these conservative post-day-1 adjustments are still present
+    const scoreStale = typeof parsed.minScoreScalp === 'number' && parsed.minScoreScalp > 60;
+    const concStale  = typeof parsed.maxConcurrentScalps === 'number' && parsed.maxConcurrentScalps < 4;
+    const dedupStale = typeof parsed.dedupWindowMinutes === 'number' && parsed.dedupWindowMinutes > 20;
     if (scoreStale || concStale || dedupStale) {
       fs.unlinkSync(PARAMS_FILE);
       logger.info(
         `scalpParams: reset stale scalp_params.json ` +
         `(score=${parsed.minScoreScalp}, concurrent=${parsed.maxConcurrentScalps}, dedup=${parsed.dedupWindowMinutes}min) ` +
-        `— new defaults will apply on next boot`
+        `— aggressive stress-test defaults will apply on next boot`
       );
     }
   } catch (e) {

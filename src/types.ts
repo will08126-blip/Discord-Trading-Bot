@@ -192,7 +192,13 @@ export interface SwingMeta {
 // ─── Paper Trading Types ──────────────────────────────────────────────────────
 
 export type PaperTradeStatus = 'pending' | 'active' | 'closed';
-export type PaperCloseReason = 'SL hit' | 'TP hit' | 'EMA breakdown' | 'manual';
+export type PaperCloseReason =
+  | 'SL hit'
+  | 'TP hit'
+  | 'EMA breakdown'
+  | 'manual'
+  | 'max hold time'
+  | 'pending expired';
 
 /**
  * Rich indicator snapshot captured at the moment a paper trade is entered.
@@ -238,7 +244,7 @@ export interface PaperTrade {
   currentPrice: number;
   stopLoss: number;
   takeProfit: number;
-  positionSizeDollars: number;
+  positionSizeDollars: number;  // risk amount in dollars (what we're willing to lose on SL)
   leverage: number;
   strategy: string;
   tradeType: string;
@@ -253,10 +259,17 @@ export interface PaperTrade {
   closeReason?: PaperCloseReason;
   balanceAfter?: number;
   meta?: ScalpEntryMetadata;  // rich snapshot captured at entry for analysis
+
+  // Pending order fields (scalp limit orders)
+  pendingEntryPrice?: number;   // limit price to wait for (SCALP only)
+  pendingExpiresAt?: string;    // ISO string — cancel if not filled by this time
 }
 
 export interface PaperState {
   virtualBalance: number;
   startingBalance: number;
   lastUpdated: string;
+  consecutiveLosses?: number;    // running count of consecutive losses
+  circuitBreakerUntil?: string;  // ISO string — skip new entries until this time
+  blownAt?: string;              // ISO string — set when balance drops below minimum; cleared on reset
 }
