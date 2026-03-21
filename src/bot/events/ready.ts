@@ -1,5 +1,5 @@
 import type { Client, TextChannel } from 'discord.js';
-import { EmbedBuilder } from 'discord.js';
+import { ChannelType, EmbedBuilder } from 'discord.js';
 import { deployCommands, commands } from '../commands/index';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
@@ -42,6 +42,49 @@ export async function onReady(client: Client): Promise<void> {
 
   if (!guildId) {
     logger.warn('No guild ID found — falling back to global commands (up to 1h propagation)');
+  }
+
+  // ── Find or create dedicated bot channel ───────────────────────────────────
+  // The bot manages its own signal channel so you don't have to configure it
+  // manually. On first boot it creates #bot-signals (or BOT_CHANNEL_NAME);
+  // on subsequent boots it reuses the existing channel.
+  if (guildId) {
+    const channelName = process.env.BOT_CHANNEL_NAME ?? 'bot-signals';
+    try {
+      const guild = await client.guilds.fetch(guildId);
+      const allChannels = await guild.channels.fetch();
+
+      // Look for an existing text channel with our name
+      const existing = allChannels.find(
+        (c): c is TextChannel =>
+          c !== null && c.type === ChannelType.GuildText && c.name === channelName
+      ) as TextChannel | undefined;
+
+      let botChannel: TextChannel;
+      if (existing) {
+        botChannel = existing;
+        logger.info(`Bot channel: reusing existing #${channelName} (${botChannel.id})`);
+      } else {
+        // Create a fresh dedicated channel
+        botChannel = await guild.channels.create({
+          name: channelName,
+          type: ChannelType.GuildText,
+          topic: '🤖 Trading bot signals, paper trade alerts, and daily summaries — do not post here',
+          reason: 'Discord Trading Bot — auto-created dedicated signal channel',
+        });
+        logger.info(`Bot channel: created #${channelName} (${botChannel.id})`);
+      }
+
+      // Override config so ALL notifications go to this channel
+      config.discord.signalChannelId  = botChannel.id;
+      config.discord.summaryChannelId = botChannel.id;
+    } catch (err) {
+      // Non-fatal — continue with whatever channel ID is in env vars
+      logger.warn(
+        `Bot channel: could not find/create #${channelName} — ` +
+        `check the bot has Manage Channels permission. Falling back to SIGNAL_CHANNEL_ID. Error: ${err}`
+      );
+    }
   }
 
   // ── Deploy commands ────────────────────────────────────────────────────────

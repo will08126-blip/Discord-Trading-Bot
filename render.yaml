@@ -50,6 +50,15 @@ services:
         value: "1200"
       - key: COINGECKO_API_KEY
         sync: false
+      # Bot channel management
+      # BOT_CHANNEL_NAME: the bot will find or create this channel in your server on startup.
+      # All signals, alerts, and summaries will be sent here automatically.
+      - key: BOT_CHANNEL_NAME
+        value: "bot-signals"
+      # COINBASE_FILTER: set to "false" to signal on all top-20 cryptos regardless of exchange listing.
+      # Default "true" restricts signals to coins available on Coinbase (BASE app compatible).
+      - key: COINBASE_FILTER
+        value: "true"
       - key: NODE_ENV
         value: production
     disk:

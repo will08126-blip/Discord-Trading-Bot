@@ -5,7 +5,9 @@ import { logger } from '../utils/logger';
 
 const YAHOO_ASSETS = ['XAU/USD', 'XAG/USD', 'QQQ/USD', 'SPY/USD'];
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const COINGECKO_URL = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1';
+const COINGECKO_URL = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=40&page=1';
+// Fetch more than 20 so that after Coinbase filtering we still have enough pairs
+const COINBASE_PRODUCTS_URL = 'https://api.exchange.coinbase.com/products';
 
 // CoinGecko coin ID → CCXT symbol override (for non-standard mappings)
 const ID_TO_SYMBOL_OVERRIDE: Record<string, string> = {
@@ -27,6 +29,13 @@ interface CoinGeckoMarket {
   id: string;
   symbol: string;
   name: string;
+}
+
+interface CoinbaseProduct {
+  id: string;
+  base_currency: string;
+  quote_currency: string;
+  status: string;
 }
 
 interface TopCryptosCache {
@@ -105,20 +114,81 @@ function saveDiskCache(cache: TopCryptosCache): void {
   }
 }
 
+/**
+ * Fetch the set of base-currency symbols that are actively traded on Coinbase Exchange
+ * (covers the same assets as the Coinbase / BASE app consumer product).
+ * Returns an empty Set on failure so callers can decide whether to filter or pass-through.
+ */
+async function fetchCoinbaseSymbols(): Promise<Set<string>> {
+  try {
+    const data = await fetchJson(COINBASE_PRODUCTS_URL) as CoinbaseProduct[];
+    if (!Array.isArray(data)) {
+      logger.warn('topCryptos: Coinbase products endpoint returned unexpected shape — skipping filter');
+      return new Set();
+    }
+    const symbols = new Set<string>();
+    for (const product of data) {
+      if (
+        typeof product.base_currency === 'string' &&
+        product.status === 'online' &&
+        // Only USD or USDT quote — these are the spot markets users can trade
+        (product.quote_currency === 'USD' || product.quote_currency === 'USDT')
+      ) {
+        symbols.add(product.base_currency.toUpperCase());
+      }
+    }
+    logger.info(`topCryptos: Coinbase filter loaded — ${symbols.size} tradeable base assets`);
+    return symbols;
+  } catch (err) {
+    logger.warn(`topCryptos: Coinbase filter fetch failed — all top-20 pairs will be used: ${err}`);
+    return new Set(); // empty = no filter applied
+  }
+}
+
 async function fetchFromCoinGecko(): Promise<string[]> {
+  // Pull top-40 from CoinGecko (we ask for more so filtering still yields ~20)
   const data = await fetchJson(COINGECKO_URL) as CoinGeckoMarket[];
   if (!Array.isArray(data)) {
     throw new Error(`CoinGecko returned unexpected data: ${typeof data}`);
   }
-  const pairs: string[] = [];
+
+  // Build the full candidate list (validated, deduplicated, no stablecoins)
+  const candidates: string[] = [];
   for (const coin of data) {
     const pair = coinToUsdtPair(coin);
     if (pair && pair !== 'USDT/USDT') {
-      pairs.push(pair);
+      candidates.push(pair);
     }
-    if (pairs.length >= 20) break;
   }
-  return pairs;
+
+  // Apply Coinbase filter if enabled (default: true)
+  const filterEnabled = (process.env.COINBASE_FILTER ?? 'true').toLowerCase() !== 'false';
+  if (!filterEnabled) {
+    logger.info('topCryptos: COINBASE_FILTER=false — using raw CoinGecko top-20');
+    return candidates.slice(0, 20);
+  }
+
+  const coinbaseSymbols = await fetchCoinbaseSymbols();
+
+  if (coinbaseSymbols.size === 0) {
+    // Fetch failed — fall back to top-20 unfiltered so the bot keeps running
+    logger.warn('topCryptos: Coinbase filter empty — using unfiltered CoinGecko top-20');
+    return candidates.slice(0, 20);
+  }
+
+  // Keep only coins whose base symbol exists on Coinbase
+  const filtered = candidates.filter((pair) => {
+    const base = pair.split('/')[0];
+    return coinbaseSymbols.has(base);
+  });
+
+  logger.info(
+    `topCryptos: Coinbase filter applied — ${filtered.length}/${candidates.length} pairs pass ` +
+    `(${candidates.filter(p => !coinbaseSymbols.has(p.split('/')[0])).map(p => p.split('/')[0]).join(', ')} excluded)`
+  );
+
+  // Return up to 20 Coinbase-available pairs
+  return filtered.slice(0, 20);
 }
 
 export async function refreshTopCryptos(): Promise<void> {
