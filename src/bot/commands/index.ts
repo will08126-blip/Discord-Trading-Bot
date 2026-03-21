@@ -22,6 +22,7 @@ import * as paperStatusCmd from './paper-status';
 import * as paperPositionsCmd from './paper-positions';
 import * as paperHistoryCmd from './paper-history';
 import * as paperPerformanceCmd from './paper-performance';
+import * as dailyReportCmd from './daily-report';
 
 export interface Command {
   data: { toJSON: () => unknown; name: string };
@@ -49,6 +50,7 @@ export const commands = new Map<string, Command>([
   ['paper-positions', paperPositionsCmd],
   ['paper-history', paperHistoryCmd],
   ['paper-performance', paperPerformanceCmd],
+  ['daily-report', dailyReportCmd],
 ]);
 
 /** Deploy (register) all slash commands with Discord's API */

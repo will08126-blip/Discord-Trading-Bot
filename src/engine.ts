@@ -4,6 +4,7 @@ import { discordClient } from './bot/client';
 import { fetchAllAssets, fetchOHLCV, fetchCurrentPrice } from './data/marketData';
 import { checkPaperPositions, enterPaperTrade, buildDailyPaperReportEmbed, buildPaperHeartbeatEmbed } from './paper/paperTrading';
 import { initializeTopCryptos, refreshTopCryptos } from './data/topCryptos';
+import { postDailyPaperReport } from './paper/dailyReport';
 import { detectRegime, isTradeableRegime, setLastRegime, getLastRegimes } from './regime/regimeDetector';
 import { TrendPullbackStrategy } from './strategies/trendPullback';
 import { BreakoutRetestStrategy } from './strategies/breakoutRetest';
@@ -596,8 +597,8 @@ async function postDailySummary() {
 // ─── Schedule setup ───────────────────────────────────────────────────────────
 
 export function startScheduler() {
-  // Initialize top 20 cryptos from CoinGecko
-  initializeTopCryptos().catch((err) => logger.error('Top cryptos init error:', err));
+  // Initialise hardcoded asset list (synchronous — no network call)
+  initializeTopCryptos();
 
   // Reset stale scalp_params.json if it has old aggressive thresholds, then ensure file exists
   resetStaleScalpParams();
@@ -645,24 +646,25 @@ export function startScheduler() {
       .catch((err) => logger.error('Paper noon heartbeat channel fetch error:', err));
   });
 
-  // Midnight UTC: full daily paper report → #paper-trading + daily signal summary → #bot-signals
+  // Midnight UTC: daily signal/market summary → #bot-signals
   cron.schedule('0 0 * * *', () => {
-    // Signal channel: market summary
     postDailySummary().catch((err) => logger.error('Unhandled summary error:', err));
+    refreshTopCryptos(); // no-op for static list, kept for future use
+  });
 
-    // Paper channel: full daily paper report
+  // 23:59 UTC daily (≈ 7:59 PM EDT / 6:59 PM EST):
+  // Full paper trading report for the completed trading day → #paper-trading
+  // Saves a .md file and posts it as an attachment so you can paste it into Claude.
+  cron.schedule('59 23 * * *', () => {
     getPaperChannel()
       .then((ch) => {
         if (ch) {
           const date = new Date().toISOString().slice(0, 10);
-          ch.send(buildDailyPaperReportEmbed(date))
-            .catch((err) => logger.error('Paper daily report error:', err));
+          postDailyPaperReport(ch, date)
+            .catch((err) => logger.error('Daily paper report error:', err));
         }
       })
-      .catch((err) => logger.error('Paper daily report channel fetch error:', err));
-
-    // Refresh top cryptos cache for next day
-    refreshTopCryptos().catch((err) => logger.error('Top cryptos refresh error:', err));
+      .catch((err) => logger.error('Daily paper report channel fetch error:', err));
   });
 
   // Scalp position monitoring — every 90s
