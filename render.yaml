@@ -30,6 +30,8 @@ services:
         value: "5"
       - key: ENABLED
         value: "true"
+      - key: EXCHANGE_ID
+        value: "gate"          # Render IPs are geo-blocked by Binance (HTTP 451) — Gate.io works
       # Leverage-adjusted profit targets
       # earlyProfitAlertPct: alert when capital is up this fraction (0.5 = 50%)
       # targetReturnPct:     set TP price to close at this capital return (1.0 = 100%)

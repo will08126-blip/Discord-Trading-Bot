@@ -142,7 +142,19 @@ export async function fetchCurrentPrice(asset: Asset): Promise<number> {
 }
 
 export async function fetchAllAssets(): Promise<MultiTimeframeData[]> {
-  return Promise.all(
+  // Use allSettled so one bad symbol (e.g. a CoinGecko coin not listed on Gate.io)
+  // never kills the entire scan cycle — failed assets are skipped with a warning.
+  const results = await Promise.allSettled(
     config.trading.assets.map((asset) => fetchMultiTimeframe(asset as Asset))
   );
+  const successful: MultiTimeframeData[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === 'fulfilled') {
+      successful.push(r.value);
+    } else {
+      logger.warn(`fetchAllAssets: skipping ${config.trading.assets[i]} — ${(r.reason as Error)?.message ?? r.reason}`);
+    }
+  }
+  return successful;
 }

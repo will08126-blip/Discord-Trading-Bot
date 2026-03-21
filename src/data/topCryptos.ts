@@ -36,14 +36,29 @@ interface TopCryptosCache {
 
 let memoryCache: TopCryptosCache | null = null;
 
+// Symbols that are valid for CCXT: purely alphanumeric, 2–10 chars, no underscores/hyphens
+const VALID_SYMBOL_RE = /^[A-Z0-9]{2,10}$/;
+
 function coinToUsdtPair(coin: CoinGeckoMarket): string | null {
+  if (!coin || typeof coin.id !== 'string' || typeof coin.symbol !== 'string') return null;
   if (SKIP_IDS.has(coin.id)) return null;
+
   if (ID_TO_SYMBOL_OVERRIDE[coin.id]) {
     const override = ID_TO_SYMBOL_OVERRIDE[coin.id];
+    // Double-check override itself isn't a skip target
     if (SKIP_IDS.has(coin.id)) return null;
     return override;
   }
-  const symbol = coin.symbol.toUpperCase();
+
+  const symbol = coin.symbol.toUpperCase().trim();
+
+  // Reject anything that looks like a derivative product, LP token, or garbage
+  // Valid exchange symbols are 2–10 uppercase letters/digits only — no underscores, hyphens, dots
+  if (!VALID_SYMBOL_RE.test(symbol)) {
+    logger.debug(`topCryptos: skipping coin "${coin.id}" — symbol "${symbol}" is not a plain CCXT symbol`);
+    return null;
+  }
+
   return `${symbol}/USDT`;
 }
 
