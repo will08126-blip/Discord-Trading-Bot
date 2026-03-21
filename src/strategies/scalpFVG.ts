@@ -58,6 +58,21 @@ export class ScalpFVGStrategy extends BaseStrategy {
     if (!candles5m  || candles5m.length  < 30) return null;
     if (!candles15m || candles15m.length < 20) return null;
 
+    // ── Time-based filters ────────────────────────────────────────────────────
+    const nowUtc      = new Date();
+    const hourUtc     = nowUtc.getUTCHours();
+    const dayOfWeek   = nowUtc.getUTCDay(); // 0=Sun, 6=Sat
+    const isWeekend   = dayOfWeek === 0 || dayOfWeek === 6;
+
+    // Hard blacklist: 12:00–13:00 UTC = London lunch.
+    // First live session showed 7 trades, 0 wins in this window.
+    // Low volume + directionless chop = no edge for FVG scalps.
+    if (hourUtc === 12) return null;
+
+    // Weekend score penalty applied later in scoring — store flag here.
+    // Weekends: lower institutional volume → FVGs are noisier, less likely to fill with momentum.
+    const weekendScorePenalty = isWeekend ? 8 : 0;
+
     const n1 = candles1m.length - 1;
     const n5 = candles5m.length  - 1;
     const currentPrice = candles1m[n1].close;
@@ -255,11 +270,15 @@ export class ScalpFVGStrategy extends BaseStrategy {
 
     const score = this.totalScore(components);
 
-    // Scalp gate: 45 minimum; hybrids that score ≥ 65 get posted to #bot-signals
+    // Apply weekend penalty: on Sat/Sun require 8 extra points above the normal gate.
+    // This filters out the noisier FVGs that form during low-volume weekend sessions.
+    const effectiveScore = score - weekendScorePenalty;
+
+    // Scalp gate: 45 minimum (before penalty); hybrids ≥ 65 posted to #bot-signals
     const tier: ScoreTier =
-      score >= 80 ? 'ELITE' :
-      score >= 60 ? 'STRONG' :
-      score >= 45 ? 'MEDIUM' :
+      effectiveScore >= 80 ? 'ELITE' :
+      effectiveScore >= 60 ? 'STRONG' :
+      effectiveScore >= 45 ? 'MEDIUM' :
       'NO_TRADE';
 
     if (tier === 'NO_TRADE') return null;

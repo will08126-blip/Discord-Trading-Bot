@@ -62,23 +62,33 @@ export interface AdjustmentRecord {
 // ─── Defaults — aggressive, let data decide ──────────────────────────────────
 
 export const DEFAULT_SCALP_PARAMS: ScalpParams = {
-  // Score gates — raised from 35/45 to filter low-conviction noise.
-  // Still aggressive enough to get plenty of trades for data collection,
-  // but requires at least two confluent conditions to fire.
-  minScoreScalp: 52,
-  minScoreHybrid: 60,
+  // Score gates — data-driven from first live session (2026-03-21):
+  // win/loss score spread was only 1.2 pts at gate=52, meaning low quality signals
+  // were passing. Raised to 62 to require genuine multi-layer confluence.
+  // Hybrid (posted to #bot-signals) requires 68+ to keep that channel clean.
+  minScoreScalp: 62,
+  minScoreHybrid: 68,
   bypassSwingGateForScalps: true,
   allowedRegimes: ['TREND_UP', 'TREND_DOWN', 'RANGE', 'VOL_EXPANSION', 'LOW_VOL_COMPRESSION'],
 
   riskPerTradePct: 0.02,
   leverageMultiplier: 1.0,
-  maxConcurrentScalps: 4,    // reduced from 5 — prevents pile-ups in fast markets
+  maxConcurrentScalps: 2,    // reduced from 4 — 4 concurrent scalps created too much simultaneous exposure
 
-  dedupWindowMinutes: 20,    // same asset can't re-trigger for 20 min (up from 10)
+  dedupWindowMinutes: 45,    // up from 20 — 20min was near-no-filter on volatile crypto; 45 forces spacing
+
   sessionFilterEnabled: false,
   allowedHoursUTC: [],
 
-  assetWeights: {},
+  // Asset weights: 0.0 = completely skip this asset.
+  // BONK and HYPE both ran 0% win rate across 8 combined trades on day 1.
+  // BONK is a meme coin with irrational weekend moves; HYPE is a new token
+  // with thin weekend liquidity. Both suppressed until weekly auto-adjuster
+  // re-enables them if they show improvement.
+  assetWeights: {
+    'BONK/USDT': 0,
+    'HYPE/USDT': 0,
+  },
   strategyWeights: {},
 
   lastAutoAdjust: new Date(0).toISOString(),
@@ -130,10 +140,18 @@ export function resetStaleScalpParams(): void {
     if (!fs.existsSync(PARAMS_FILE)) return;
     const raw = fs.readFileSync(PARAMS_FILE, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<ScalpParams>;
-    // If the stored score gate is below the new floor, it's the old aggressive setting
-    if (typeof parsed.minScoreScalp === 'number' && parsed.minScoreScalp < 50) {
+    // Reset if score gate or concurrent limit are below the new minimums from day-1 analysis.
+    // This forces a one-time reset to updated defaults without a manual server edit.
+    const scoreStale = typeof parsed.minScoreScalp === 'number' && parsed.minScoreScalp < 62;
+    const concStale  = typeof parsed.maxConcurrentScalps === 'number' && parsed.maxConcurrentScalps > 2;
+    const dedupStale = typeof parsed.dedupWindowMinutes === 'number' && parsed.dedupWindowMinutes < 45;
+    if (scoreStale || concStale || dedupStale) {
       fs.unlinkSync(PARAMS_FILE);
-      logger.info(`scalpParams: reset stale scalp_params.json (minScoreScalp was ${parsed.minScoreScalp} < 50) — new defaults will apply`);
+      logger.info(
+        `scalpParams: reset stale scalp_params.json ` +
+        `(score=${parsed.minScoreScalp}, concurrent=${parsed.maxConcurrentScalps}, dedup=${parsed.dedupWindowMinutes}min) ` +
+        `— new defaults will apply on next boot`
+      );
     }
   } catch (e) {
     logger.warn(`scalpParams: could not check/reset stale params: ${e}`);
