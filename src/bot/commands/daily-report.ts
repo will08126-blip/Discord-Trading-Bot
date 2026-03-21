@@ -5,7 +5,7 @@ import { logger } from '../../utils/logger';
 
 export const data = new SlashCommandBuilder()
   .setName('daily-report')
-  .setDescription('Generate the paper trading daily report — covers today\'s full UTC trading day (≈8 PM EDT prior night → now)')
+  .setDescription('Paper trading report for today\'s session (00:00–23:59 UTC ≈ 8 PM–7:59 PM EDT).')
   .addStringOption((opt) =>
     opt.setName('date')
       .setDescription('Override date to report on (YYYY-MM-DD). Defaults to today UTC.')
