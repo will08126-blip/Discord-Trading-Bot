@@ -228,11 +228,11 @@ export async function getTopCryptoPairs(): Promise<string[]> {
       memoryCache = disk;
       return disk.pairs;
     }
-    // Fallback to hardcoded defaults
-    return ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT',
-            'DOGE/USDT', 'ADA/USDT', 'AVAX/USDT', 'LINK/USDT', 'DOT/USDT',
-            'MATIC/USDT', 'LTC/USDT', 'BCH/USDT', 'UNI/USDT', 'ATOM/USDT',
-            'FIL/USDT', 'NEAR/USDT', 'TRX/USDT', 'APT/USDT', 'OP/USDT'];
+    // Fallback: top Coinbase-listed coins by approximate market cap (all tradeable on BASE app)
+    return ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT',
+            'ADA/USDT', 'AVAX/USDT', 'LINK/USDT', 'SHIB/USDT', 'DOT/USDT',
+            'LTC/USDT', 'BCH/USDT', 'UNI/USDT', 'ATOM/USDT', 'NEAR/USDT',
+            'APT/USDT', 'OP/USDT', 'ARB/USDT', 'SUI/USDT', 'INJ/USDT'];
   }
 }
 
