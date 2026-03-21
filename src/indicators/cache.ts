@@ -9,7 +9,8 @@
  * Usage — swap `ema(candles, 20)` for `cachedEma(candles, 20)` etc.
  */
 import type { OHLCV } from '../types';
-import { ema, rsi, atr, atrAverage, vwap } from './indicators';
+import { ema, rsi, atr, atrAverage, vwap, macd, detectFVGs, emaQuickTrend } from './indicators';
+import type { MACDResult, FVGZone } from './indicators';
 
 const store = new WeakMap<OHLCV[], Map<string, unknown>>();
 
@@ -41,3 +42,21 @@ export const cachedAtrAverage = (candles: OHLCV[], period: number): number =>
 
 export const cachedVwap = (candles: OHLCV[]): number[] =>
   get(candles, 'vwap', () => vwap(candles));
+
+export const cachedMacd = (
+  candles: OHLCV[],
+  fast = 12,
+  slow = 26,
+  signal = 9,
+): MACDResult =>
+  get(candles, `macd_${fast}_${slow}_${signal}`, () => macd(candles, fast, slow, signal));
+
+export const cachedFVGs = (candles: OHLCV[], maxZones = 5): FVGZone[] =>
+  get(candles, `fvg_${maxZones}`, () => detectFVGs(candles, maxZones));
+
+export const cachedEmaQuickTrend = (
+  candles: OHLCV[],
+  fast = 8,
+  slow = 21,
+): 'UP' | 'DOWN' | 'NEUTRAL' =>
+  get(candles, `emaQt_${fast}_${slow}`, () => emaQuickTrend(candles, fast, slow));

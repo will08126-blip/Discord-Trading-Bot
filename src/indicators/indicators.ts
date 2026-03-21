@@ -335,3 +335,170 @@ export function sessionQualityScore(): number {
   if (hour >= 0  && hour < 8 ) return 2; // Asia
   return 3; // everything else (late NY 17–24 UTC)
 }
+
+// ─── MACD ─────────────────────────────────────────────────────────────────────
+
+export interface MACDResult {
+  macdLine: number[];    // fast EMA - slow EMA
+  signalLine: number[];  // EMA of macdLine
+  histogram: number[];   // macdLine - signalLine
+}
+
+/**
+ * MACD indicator.
+ * Default params: fast=12, slow=26, signal=9 (standard)
+ * For scalp use fast=5, slow=13, signal=3 (more responsive)
+ *
+ * All output arrays are padded to input candle length with NaN.
+ */
+export function macd(
+  candles: OHLCV[],
+  fastPeriod = 12,
+  slowPeriod = 26,
+  signalPeriod = 9,
+): MACDResult {
+  const cls = closes(candles);
+  const n = cls.length;
+
+  // Fast and slow EMAs (use library)
+  const fastEma = pad(
+    EMA.calculate({ period: fastPeriod, values: cls }),
+    n,
+    NaN,
+  );
+  const slowEma = pad(
+    EMA.calculate({ period: slowPeriod, values: cls }),
+    n,
+    NaN,
+  );
+
+  // MACD line = fast - slow (only valid where both exist)
+  const macdLine: number[] = fastEma.map((f, i) =>
+    isNaN(f) || isNaN(slowEma[i]) ? NaN : f - slowEma[i],
+  );
+
+  // Signal line = EMA of MACD line (skip NaN prefix)
+  const validMacd = macdLine.filter((v) => !isNaN(v));
+  const rawSignal =
+    validMacd.length >= signalPeriod
+      ? EMA.calculate({ period: signalPeriod, values: validMacd })
+      : [];
+
+  // How many leading NaNs are in macdLine?
+  const macdOffset = macdLine.findIndex((v) => !isNaN(v));
+  const signalLine: number[] = Array(n).fill(NaN);
+  const sigOffset = macdOffset + (validMacd.length - rawSignal.length);
+  for (let i = 0; i < rawSignal.length; i++) {
+    signalLine[sigOffset + i] = rawSignal[i];
+  }
+
+  const histogram: number[] = macdLine.map((m, i) =>
+    isNaN(m) || isNaN(signalLine[i]) ? NaN : m - signalLine[i],
+  );
+
+  return { macdLine, signalLine, histogram };
+}
+
+// ─── Fair Value Gap (FVG) ─────────────────────────────────────────────────────
+
+export interface FVGZone {
+  type: 'BULLISH' | 'BEARISH';
+  gapHigh: number;   // top of the imbalance zone
+  gapLow: number;    // bottom of the imbalance zone
+  midpoint: number;
+  candle1Index: number; // index of the first candle of the 3-candle sequence
+  strength: number;     // gap size as % of price — larger = stronger
+  filled: boolean;      // true if price has since re-entered the zone
+}
+
+/**
+ * Detects Fair Value Gaps (FVGs / imbalances) in a candle array.
+ *
+ * Bullish FVG: candles[i-2].high < candles[i].low
+ *   → price gapped up leaving an unfilled zone between i-2 high and i low.
+ *
+ * Bearish FVG: candles[i-2].low > candles[i].high
+ *   → price gapped down leaving an unfilled zone between i-2 low and i high.
+ *
+ * Only returns the most recent `maxZones` unfilled FVGs, sorted newest-first.
+ */
+export function detectFVGs(candles: OHLCV[], maxZones = 5): FVGZone[] {
+  const n = candles.length;
+  if (n < 3) return [];
+
+  const zones: FVGZone[] = [];
+
+  for (let i = 2; i < n; i++) {
+    const prev2 = candles[i - 2]; // candle before the impulse
+    const curr  = candles[i];     // candle after the impulse
+
+    // Bullish FVG
+    if (prev2.high < curr.low) {
+      const gapLow  = prev2.high;
+      const gapHigh = curr.low;
+      const mid     = (gapLow + gapHigh) / 2;
+      const strength = (gapHigh - gapLow) / mid;
+
+      // Check if any subsequent candle filled this zone
+      let filled = false;
+      for (let j = i + 1; j < n; j++) {
+        if (candles[j].low <= gapHigh && candles[j].high >= gapLow) {
+          filled = true;
+          break;
+        }
+      }
+      zones.push({ type: 'BULLISH', gapHigh, gapLow, midpoint: mid, candle1Index: i - 2, strength, filled });
+    }
+
+    // Bearish FVG
+    if (prev2.low > curr.high) {
+      const gapHigh = prev2.low;
+      const gapLow  = curr.high;
+      const mid     = (gapLow + gapHigh) / 2;
+      const strength = (gapHigh - gapLow) / mid;
+
+      let filled = false;
+      for (let j = i + 1; j < n; j++) {
+        if (candles[j].low <= gapHigh && candles[j].high >= gapLow) {
+          filled = true;
+          break;
+        }
+      }
+      zones.push({ type: 'BEARISH', gapHigh, gapLow, midpoint: mid, candle1Index: i - 2, strength, filled });
+    }
+  }
+
+  // Return most-recent unfilled zones first
+  return zones
+    .filter((z) => !z.filled)
+    .slice(-maxZones)
+    .reverse();
+}
+
+/**
+ * Returns true if `price` is currently inside (or very close to) an FVG zone.
+ * `tolerancePct` widens the zone slightly to account for wicks / rounding.
+ */
+export function isPriceInFVG(price: number, zone: FVGZone, tolerancePct = 0.001): boolean {
+  return price >= zone.gapLow * (1 - tolerancePct) && price <= zone.gapHigh * (1 + tolerancePct);
+}
+
+// ─── Higher-timeframe trend filter ───────────────────────────────────────────
+
+/**
+ * Quick MTF trend check: returns 'UP', 'DOWN', or 'NEUTRAL' based on
+ * whether EMA8 > EMA21 (up) or EMA8 < EMA21 (down) on a given candle array.
+ * Used by the ScalpFVG strategy to gate entries against 5m / 15m trend.
+ */
+export function emaQuickTrend(candles: OHLCV[], fastPeriod = 8, slowPeriod = 21): 'UP' | 'DOWN' | 'NEUTRAL' {
+  const n = candles.length;
+  if (n < slowPeriod + 1) return 'NEUTRAL';
+  const fastEma = pad(EMA.calculate({ period: fastPeriod, values: closes(candles) }), n, NaN);
+  const slowEma = pad(EMA.calculate({ period: slowPeriod, values: closes(candles) }), n, NaN);
+  const f = fastEma[n - 1];
+  const s = slowEma[n - 1];
+  if (isNaN(f) || isNaN(s)) return 'NEUTRAL';
+  if (f > s * 1.0002) return 'UP';
+  if (f < s * 0.9998) return 'DOWN';
+  return 'NEUTRAL';
+}

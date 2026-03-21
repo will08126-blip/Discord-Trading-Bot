@@ -2,11 +2,13 @@ import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import type { TextChannel } from 'discord.js';
 import { EmbedBuilder } from 'discord.js';
-import type { StrategySignal, PaperTrade, PaperState } from '../types';
-import { fetchCurrentPrice } from '../data/marketData';
+import type { StrategySignal, PaperTrade, PaperState, ScalpEntryMetadata } from '../types';
+import { fetchCurrentPrice, fetchOHLCV } from '../data/marketData';
 import type { Asset } from '../types';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { cachedRsi, cachedAtr, cachedMacd, cachedFVGs, cachedEmaQuickTrend } from '../indicators/cache';
+import { volumeAverage } from '../indicators/indicators';
 
 // ─── State persistence ────────────────────────────────────────────────────────
 
@@ -98,6 +100,110 @@ function buildPaperCloseEmbed(trade: PaperTrade): { embeds: EmbedBuilder[] } {
 
 // ─── Core functions ────────────────────────────────────────────────────────────
 
+/**
+ * Captures a rich indicator snapshot at the time of paper trade entry.
+ * Used later by the 7-day analysis engine to find what correlates with wins.
+ */
+async function captureEntryMetadata(
+  signal: StrategySignal,
+  currentPrice: number,
+): Promise<ScalpEntryMetadata | undefined> {
+  try {
+    const asset = signal.asset as Asset;
+    const [candles1m, candles5m, candles15m] = await Promise.all([
+      fetchOHLCV(asset, '1m', 50).catch(() => null),
+      fetchOHLCV(asset, '5m', 50).catch(() => null),
+      fetchOHLCV(asset, '15m', 30).catch(() => null),
+    ]);
+
+    const now = new Date();
+    const meta: ScalpEntryMetadata = {
+      hourUTC: now.getUTCHours(),
+      dayOfWeekUTC: now.getUTCDay(),
+      rsi5m: NaN,
+      macdHist5m: NaN,
+      macdCrossed5m: false,
+      trend5m: 'NEUTRAL',
+      rsi1m: NaN,
+      atr1m: NaN,
+      volumeRatio1m: 1,
+      trend15m: 'NEUTRAL',
+      rsi15m: NaN,
+      hasFVG: false,
+      fvgType: 'NONE',
+      fvgStrength: 0,
+      signalScore: signal.score,
+      signalTier: signal.tier,
+      regime: signal.regime,
+      stopDistPct: Math.abs(currentPrice - signal.stopLoss) / currentPrice,
+    };
+
+    if (candles5m && candles5m.length >= 20) {
+      const n5 = candles5m.length - 1;
+      meta.rsi5m   = cachedRsi(candles5m, 14)[n5] ?? NaN;
+      meta.trend5m = cachedEmaQuickTrend(candles5m, 8, 21);
+      const macd5  = cachedMacd(candles5m, 5, 13, 3);
+      meta.macdHist5m = macd5.histogram[n5] ?? NaN;
+      const prevHist  = macd5.histogram[n5 - 1] ?? NaN;
+      const prevMacd  = macd5.macdLine[n5 - 1] ?? NaN;
+      const prevSig   = macd5.signalLine[n5 - 1] ?? NaN;
+      const curMacd   = macd5.macdLine[n5] ?? NaN;
+      const curSig    = macd5.signalLine[n5] ?? NaN;
+      meta.macdCrossed5m =
+        !isNaN(prevMacd) && !isNaN(prevSig) && !isNaN(curMacd) && !isNaN(curSig) &&
+        ((prevMacd <= prevSig && curMacd > curSig) || (prevMacd >= prevSig && curMacd < curSig));
+      void prevHist; // suppress unused
+
+      // FVG check on 5m
+      const fvgs5m = cachedFVGs(candles5m, 5);
+      const isLong = signal.direction === 'LONG';
+      const nearby = fvgs5m.filter(
+        (z) => Math.abs(z.midpoint - currentPrice) / currentPrice <= 0.015 &&
+               (isLong ? z.type === 'BULLISH' : z.type === 'BEARISH')
+      );
+      if (nearby.length > 0) {
+        meta.hasFVG      = true;
+        meta.fvgType     = nearby[0].type;
+        meta.fvgStrength = nearby[0].strength;
+      }
+    }
+
+    if (candles1m && candles1m.length >= 15) {
+      const n1 = candles1m.length - 1;
+      meta.rsi1m  = cachedRsi(candles1m, 14)[n1] ?? NaN;
+      meta.atr1m  = cachedAtr(candles1m, 14)[n1] ?? NaN;
+      const volAvg = volumeAverage(candles1m, 20);
+      meta.volumeRatio1m = volAvg > 0 ? (candles1m[n1].volume / volAvg) : 1;
+
+      // FVG on 1m overrides 5m if present (more precise)
+      if (!meta.hasFVG) {
+        const fvgs1m = cachedFVGs(candles1m, 8);
+        const isLong = signal.direction === 'LONG';
+        const nearby = fvgs1m.filter(
+          (z) => Math.abs(z.midpoint - currentPrice) / currentPrice <= 0.015 &&
+                 (isLong ? z.type === 'BULLISH' : z.type === 'BEARISH')
+        );
+        if (nearby.length > 0) {
+          meta.hasFVG      = true;
+          meta.fvgType     = nearby[0].type;
+          meta.fvgStrength = nearby[0].strength;
+        }
+      }
+    }
+
+    if (candles15m && candles15m.length >= 20) {
+      const n15 = candles15m.length - 1;
+      meta.rsi15m   = cachedRsi(candles15m, 14)[n15] ?? NaN;
+      meta.trend15m = cachedEmaQuickTrend(candles15m, 8, 21);
+    }
+
+    return meta;
+  } catch (err) {
+    logger.warn(`paperTrading: captureEntryMetadata failed for ${signal.asset}: ${err}`);
+    return undefined;
+  }
+}
+
 export async function enterPaperTrade(
   signal: StrategySignal,
   currentPrice: number,
@@ -110,6 +216,9 @@ export async function enterPaperTrade(
     const riskDollars = state.virtualBalance * 0.02; // 2% risk per trade
     const stopDistPct = Math.abs(currentPrice - signal.stopLoss) / currentPrice;
     const leverage = stopDistPct > 0 ? Math.min(Math.round(0.02 / stopDistPct), 100) : 10;
+
+    // Capture rich indicator snapshot asynchronously (don't block on failure)
+    const meta = await captureEntryMetadata(signal, currentPrice);
 
     const trade: PaperTrade = {
       id: uuidv4(),
@@ -125,6 +234,7 @@ export async function enterPaperTrade(
       tradeType: signal.tradeType,
       status: 'active',
       openTime: new Date().toISOString(),
+      meta,
     };
 
     const trades = loadPaperTrades();
@@ -170,11 +280,17 @@ export async function checkPaperPositions(channel: TextChannel): Promise<void> {
         const notional = trade.positionSizeDollars * trade.leverage;
         const pnlDollar = pnlPct * notional;
 
+        const closeTime = new Date().toISOString();
+        const holdMinutes = Math.round(
+          (new Date(closeTime).getTime() - new Date(trade.openTime).getTime()) / 60000
+        );
         trade.status = 'closed';
-        trade.closeTime = new Date().toISOString();
+        trade.closeTime = closeTime;
         trade.exitPrice = exitPrice;
         trade.pnlDollar = pnlDollar;
         trade.pnlR = pnlR;
+        trade.pnlPct = pnlPct;
+        trade.holdMinutes = holdMinutes;
         trade.closeReason = hitTP ? 'TP hit' : 'SL hit';
         trade.balanceAfter = state.virtualBalance + pnlDollar;
 

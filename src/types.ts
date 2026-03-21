@@ -194,6 +194,42 @@ export interface SwingMeta {
 export type PaperTradeStatus = 'pending' | 'active' | 'closed';
 export type PaperCloseReason = 'SL hit' | 'TP hit' | 'EMA breakdown' | 'manual';
 
+/**
+ * Rich indicator snapshot captured at the moment a paper trade is entered.
+ * Used by the weekly analysis engine to find which conditions correlate with wins.
+ */
+export interface ScalpEntryMetadata {
+  // Timing
+  hourUTC: number;          // 0-23
+  dayOfWeekUTC: number;     // 0=Sun, 6=Sat
+
+  // 5m indicators at entry
+  rsi5m: number;            // RSI(14)
+  macdHist5m: number;       // MACD(5,13,3) histogram value
+  macdCrossed5m: boolean;   // did MACD just cross?
+  trend5m: string;          // 'UP' | 'DOWN' | 'NEUTRAL'
+
+  // 1m indicators at entry
+  rsi1m: number;
+  atr1m: number;
+  volumeRatio1m: number;    // last bar volume / 20-bar avg
+
+  // 15m context
+  trend15m: string;         // 'UP' | 'DOWN' | 'NEUTRAL'
+  rsi15m: number;
+
+  // FVG context
+  hasFVG: boolean;          // was there an FVG at entry?
+  fvgType: string;          // 'BULLISH' | 'BEARISH' | 'NONE'
+  fvgStrength: number;      // gap size as % of price
+
+  // Signal context
+  signalScore: number;
+  signalTier: string;
+  regime: string;
+  stopDistPct: number;      // SL distance from entry as decimal (e.g. 0.002 = 0.2%)
+}
+
 export interface PaperTrade {
   id: string;
   asset: string;
@@ -212,8 +248,11 @@ export interface PaperTrade {
   exitPrice?: number;
   pnlDollar?: number;
   pnlR?: number;
+  pnlPct?: number;       // raw price move % (pre-leverage)
+  holdMinutes?: number;  // how long the trade was open
   closeReason?: PaperCloseReason;
   balanceAfter?: number;
+  meta?: ScalpEntryMetadata;  // rich snapshot captured at entry for analysis
 }
 
 export interface PaperState {

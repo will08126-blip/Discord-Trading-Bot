@@ -10,6 +10,7 @@ import { BreakoutRetestStrategy } from './strategies/breakoutRetest';
 import { LiquiditySweepStrategy } from './strategies/liquiditySweep';
 import { VolatilityExpansionStrategy } from './strategies/volatilityExpansion';
 import { SwingStrategy } from './strategies/swing';
+import { ScalpFVGStrategy } from './strategies/scalpFVG';
 import {
   applyAdaptationWeight,
   filterAndRankSignals,
@@ -27,6 +28,8 @@ import {
 import { analyseMarketStructure } from './analysis/marketStructure';
 import { findAreasOfValue, isPriceInZone } from './analysis/areaOfValue';
 import { checkHardControls, getStrategyWeight, getMinScoreThreshold } from './adaptation/adaptation';
+import { loadScalpParams, ensureScalpParamsExist } from './paper/scalpParams';
+import { postWeeklyScalpReport } from './paper/weeklyReport';
 import {
   buildSignalEmbed,
   buildTPUpdateEmbed,
@@ -61,7 +64,13 @@ const strategies = [
   new LiquiditySweepStrategy(),
   new VolatilityExpansionStrategy(),
   new SwingStrategy(),
+  new ScalpFVGStrategy(),
 ];
+
+// Strategies that are scalp-oriented and should bypass the swing quality gate.
+// The swing gate (HTF bias + zone confluence) is a SWING concept — applying it
+// to scalp strategies over-filters signals that are valid at the 1m/5m level.
+const SCALP_STRATEGIES = new Set(['Scalp FVG', 'Trend Pullback', 'Breakout Retest', 'Liquidity Sweep', 'Volatility Expansion']);
 
 /**
  * Swing-first quality gate — applied to every signal before posting.
@@ -72,9 +81,19 @@ const strategies = [
  *
  * SwingStrategy signals already pass this check internally, so they are
  * allowed through unconditionally (avoids re-running the same analysis).
+ *
+ * SCALP/HYBRID signals bypass this gate entirely — the gate is calibrated for
+ * swing timeframes (daily/4h) and would massively over-filter scalp entries.
+ * The scalp_params.json bypassSwingGateForScalps flag controls this.
  */
 function passesSwingQualityGate(signal: StrategySignal, mtfData: MultiTimeframeData): boolean {
   if (signal.strategy === 'Swing') return true; // already validated internally
+
+  // Scalp/Hybrid bypass — read from live scalp params
+  if (signal.tradeType === 'SCALP' || signal.tradeType === 'HYBRID') {
+    const params = loadScalpParams();
+    if (params.bypassSwingGateForScalps || SCALP_STRATEGIES.has(signal.strategy)) return true;
+  }
 
   try {
     const bias = analyseMarketStructure(mtfData['1w'], mtfData['1d'], mtfData['4h']);
@@ -398,18 +417,29 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
     const newSignals: any[] = [];
     const assetResults: LastScanSummary['assetResults'] = [];
 
+    // Read adaptive scalp params once per cycle
+    const scalpParams = loadScalpParams();
+
     for (const mtfData of allData) {
       const asset = mtfData.asset;
       const regime = detectRegime(asset, mtfData['4h']);
       setLastRegime(asset, regime);
 
-      if (!isTradeableRegime(regime.regime)) {
-        logger.info(`${asset}: ${regime.regime} — skipping`);
+      // Asset weight check — skip under-performing assets (scalp params)
+      const assetWeight = scalpParams.assetWeights[asset] ?? 1.0;
+      if (assetWeight <= 0) {
+        logger.info(`${asset}: weight=0 (suppressed by scalp params) — skipping`);
         assetResults.push({ asset, regime: regime.regime, topScore: null, topStrategy: null });
         continue;
       }
 
-      logger.info(`${asset}: ${regime.regime} (ADX=${regime.adx.toFixed(1)}, ATRx=${regime.atrRatio.toFixed(2)})`);
+      // Scalp strategies can run in any regime — only swing strategies need tradeable regime
+      const isScalpOnly = strategies.every((s) => SCALP_STRATEGIES.has(s.name));
+      if (!isTradeableRegime(regime.regime) && !isScalpOnly) {
+        logger.info(`${asset}: ${regime.regime} — non-scalp strategies skipping`);
+      }
+
+      logger.info(`${asset}: ${regime.regime} (ADX=${regime.adx.toFixed(1)}, ATRx=${regime.atrRatio.toFixed(2)}, assetWeight=${assetWeight.toFixed(2)})`);
 
       let assetTopScore: number | null = null;
       let assetTopStrategy: string | null = null;
@@ -417,6 +447,16 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
       // Run each strategy
       for (const strategy of strategies) {
         try {
+          // Scalp FVG works in any regime; other strategies still need tradeable regime
+          const isScalpStrategy = SCALP_STRATEGIES.has(strategy.name) && strategy.name !== 'Scalp FVG'
+            ? false  // non-FVG scalp strategies still need tradeable regime for their logic
+            : strategy.name === 'Scalp FVG';
+
+          if (!isTradeableRegime(regime.regime) && !isScalpStrategy) {
+            logger.info(`  ${strategy.name}: skipping — ${regime.regime} not tradeable`);
+            continue;
+          }
+
           let signal = strategy.analyze(mtfData, regime.regime);
           if (!signal) {
             logger.info(`  ${strategy.name}: no setup detected`);
@@ -426,25 +466,33 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
           // Fix asset on signals that use placeholder
           signal = { ...signal, asset };
 
-          // Apply adaptation weight
-          const weight = getStrategyWeight(strategy.name);
+          // Apply adaptation weights: scalp params strategy weight × adaptation weight
+          const adaptWeight   = getStrategyWeight(strategy.name);
+          const scalpWeight   = scalpParams.strategyWeights[strategy.name] ?? 1.0;
+          const combinedWeight = adaptWeight * scalpWeight;
           const preWeightScore = signal.score;
-          signal = applyAdaptationWeight(signal, weight);
+          signal = applyAdaptationWeight(signal, combinedWeight);
 
-          const weightNote = weight < 1.0
-            ? ` [weight=${weight.toFixed(2)}, score ${preWeightScore}→${signal.score}]`
+          const weightNote = combinedWeight < 1.0
+            ? ` [w=${combinedWeight.toFixed(2)}, score ${preWeightScore}→${signal.score}]`
             : '';
 
-          if (signal.tier === 'NO_TRADE') {
-            logger.info(`  ${strategy.name}: score=${signal.score} NO_TRADE${weightNote} — filtered out`);
+          // Score threshold: scalp signals use the adaptive threshold; swing uses config
+          const isScalpSignal = signal.tradeType === 'SCALP' || signal.tradeType === 'HYBRID';
+          const minScore = isScalpSignal
+            ? (signal.tradeType === 'SCALP' ? scalpParams.minScoreScalp : scalpParams.minScoreHybrid)
+            : getMinScoreThreshold();
+
+          if (signal.score < minScore || signal.tier === 'NO_TRADE') {
+            logger.info(`  ${strategy.name}: score=${signal.score} < ${minScore}${weightNote} — filtered`);
             continue;
           }
           if (!passesSwingQualityGate(signal, mtfData)) {
-            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — swing gate rejected (no HTF bias + zone confluence)`);
+            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — swing gate rejected`);
             continue;
           }
           if (isDuplicateSignal(signal)) {
-            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed (30min window)`);
+            logger.info(`  ${strategy.name}: score=${signal.score} [${signal.tier}]${weightNote} ${signal.direction} — duplicate suppressed`);
             continue;
           }
 
@@ -528,6 +576,9 @@ export function startScheduler() {
   // Initialize top 20 cryptos from CoinGecko
   initializeTopCryptos().catch((err) => logger.error('Top cryptos init error:', err));
 
+  // Ensure scalp params file exists with defaults on first run
+  ensureScalpParamsExist();
+
   const interval = config.engine.scanIntervalMinutes;
   logger.info(`Starting scan scheduler: every ${interval} min`);
 
@@ -544,6 +595,19 @@ export function startScheduler() {
     }, intervalMs);
     logger.info(`Using setInterval for ${interval}-minute scan cadence`);
   }
+
+  // Weekly scalp analysis: every Sunday at midnight UTC (0 0 * * 0)
+  // Runs the 7-day analysis, auto-adjusts scalp_params.json, posts the report + .md attachment
+  cron.schedule('0 0 * * 0', () => {
+    discordClient.channels.fetch(config.discord.signalChannelId)
+      .then((ch) => {
+        if (ch?.isTextBased()) {
+          postWeeklyScalpReport(ch as TextChannel)
+            .catch((err) => logger.error('Weekly scalp report error:', err));
+        }
+      })
+      .catch((err) => logger.error('Weekly scalp report channel fetch error:', err));
+  });
 
   // Daily summary: midnight UTC
   cron.schedule('0 0 * * *', () => {
