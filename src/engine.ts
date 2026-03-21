@@ -28,7 +28,7 @@ import {
 import { analyseMarketStructure } from './analysis/marketStructure';
 import { findAreasOfValue, isPriceInZone } from './analysis/areaOfValue';
 import { checkHardControls, getStrategyWeight, getMinScoreThreshold } from './adaptation/adaptation';
-import { loadScalpParams, ensureScalpParamsExist } from './paper/scalpParams';
+import { loadScalpParams, ensureScalpParamsExist, resetStaleScalpParams } from './paper/scalpParams';
 import { postWeeklyScalpReport } from './paper/weeklyReport';
 import {
   buildSignalEmbed,
@@ -192,21 +192,33 @@ export async function scanSingleAsset(symbol: string): Promise<SingleAssetScanRe
 // ─── Signal posting ───────────────────────────────────────────────────────────
 
 async function postSignal(signal: StrategySignal) {
-  const channel = await discordClient.channels.fetch(config.discord.signalChannelId);
-  if (!channel) {
-    logger.error(`postSignal: channel ${config.discord.signalChannelId} not found — check SIGNAL_CHANNEL_ID`);
-    return;
-  }
-  if (!channel.isTextBased()) {
-    logger.error(`postSignal: channel ${config.discord.signalChannelId} is not a text channel (type=${channel.type})`);
-    return;
+  // ── Channel routing ─────────────────────────────────────────────────────────
+  // #bot-signals  → SWING and HYBRID only (manual trading channel — keep it clean)
+  // #paper-trading → ALL signals auto-entered silently (scalp, hybrid, swing)
+  //
+  // Scalp signals are too fast for manual entry and would spam #bot-signals,
+  // so they go straight to paper trading without a Discord post.
+  const isSwingOrHybrid = signal.tradeType === 'SWING' || signal.tradeType === 'HYBRID';
+
+  if (isSwingOrHybrid) {
+    const channel = await discordClient.channels.fetch(config.discord.signalChannelId);
+    if (!channel) {
+      logger.error(`postSignal: channel ${config.discord.signalChannelId} not found`);
+    } else if (!channel.isTextBased()) {
+      logger.error(`postSignal: channel ${config.discord.signalChannelId} is not a text channel`);
+    } else {
+      await (channel as TextChannel).send(buildSignalEmbed(signal));
+      addPendingSignal(signal);
+      markSignalSent(signal);
+      logger.info(`Signal posted to #bot-signals: ${signal.asset} ${signal.direction} [${signal.tradeType}] score=${signal.score} [${signal.tier}]`);
+    }
+  } else {
+    // SCALP — register internally so dedup works, but no Discord post to #bot-signals
+    markSignalSent(signal);
+    logger.info(`Scalp signal (paper-only): ${signal.asset} ${signal.direction} score=${signal.score} [${signal.tier}]`);
   }
 
-  await (channel as TextChannel).send(buildSignalEmbed(signal));
-  addPendingSignal(signal);
-  markSignalSent(signal);
-
-  // Auto-enter paper trade — notifications go to the dedicated #paper-trading channel
+  // Auto-enter paper trade for ALL signal types — notifications → #paper-trading
   if (config.paper.enabled) {
     try {
       const currentPrice = (signal.entryZone[0] + signal.entryZone[1]) / 2;
@@ -218,8 +230,6 @@ async function postSignal(signal: StrategySignal) {
       logger.warn('Paper trade entry failed:', err);
     }
   }
-
-  logger.info(`Signal posted: ${signal.asset} ${signal.direction} score=${signal.score} [${signal.tier}]`);
 }
 
 // ─── Position monitoring ──────────────────────────────────────────────────────
@@ -589,7 +599,8 @@ export function startScheduler() {
   // Initialize top 20 cryptos from CoinGecko
   initializeTopCryptos().catch((err) => logger.error('Top cryptos init error:', err));
 
-  // Ensure scalp params file exists with defaults on first run
+  // Reset stale scalp_params.json if it has old aggressive thresholds, then ensure file exists
+  resetStaleScalpParams();
   ensureScalpParamsExist();
 
   const interval = config.engine.scanIntervalMinutes;

@@ -62,16 +62,19 @@ export interface AdjustmentRecord {
 // ─── Defaults — aggressive, let data decide ──────────────────────────────────
 
 export const DEFAULT_SCALP_PARAMS: ScalpParams = {
-  minScoreScalp: 35,
-  minScoreHybrid: 45,
+  // Score gates — raised from 35/45 to filter low-conviction noise.
+  // Still aggressive enough to get plenty of trades for data collection,
+  // but requires at least two confluent conditions to fire.
+  minScoreScalp: 52,
+  minScoreHybrid: 60,
   bypassSwingGateForScalps: true,
   allowedRegimes: ['TREND_UP', 'TREND_DOWN', 'RANGE', 'VOL_EXPANSION', 'LOW_VOL_COMPRESSION'],
 
   riskPerTradePct: 0.02,
   leverageMultiplier: 1.0,
-  maxConcurrentScalps: 5,
+  maxConcurrentScalps: 4,    // reduced from 5 — prevents pile-ups in fast markets
 
-  dedupWindowMinutes: 10,
+  dedupWindowMinutes: 20,    // same asset can't re-trigger for 20 min (up from 10)
   sessionFilterEnabled: false,
   allowedHoursUTC: [],
 
@@ -116,6 +119,26 @@ export function saveScalpParams(params: ScalpParams): void {
 }
 
 // ─── Initialise with defaults if file doesn't exist ──────────────────────────
+
+/**
+ * Wipe the on-disk scalp_params.json if its minScoreScalp is below the new
+ * minimum floor (52). This forces a one-time reset to the updated defaults
+ * without requiring a manual file edit on the server.
+ */
+export function resetStaleScalpParams(): void {
+  try {
+    if (!fs.existsSync(PARAMS_FILE)) return;
+    const raw = fs.readFileSync(PARAMS_FILE, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<ScalpParams>;
+    // If the stored score gate is below the new floor, it's the old aggressive setting
+    if (typeof parsed.minScoreScalp === 'number' && parsed.minScoreScalp < 50) {
+      fs.unlinkSync(PARAMS_FILE);
+      logger.info(`scalpParams: reset stale scalp_params.json (minScoreScalp was ${parsed.minScoreScalp} < 50) — new defaults will apply`);
+    }
+  } catch (e) {
+    logger.warn(`scalpParams: could not check/reset stale params: ${e}`);
+  }
+}
 
 export function ensureScalpParamsExist(): void {
   if (!fs.existsSync(PARAMS_FILE)) {
