@@ -3,7 +3,7 @@ import type { TextChannel } from 'discord.js';
 import { discordClient } from './bot/client';
 import { fetchAllAssets, fetchOHLCV, fetchCurrentPrice } from './data/marketData';
 import { checkPaperPositions, enterPaperTrade, buildDailyPaperReportEmbed, buildPaperHeartbeatEmbed } from './paper/paperTrading';
-import { initializeTopCryptos, refreshTopCryptos } from './data/topCryptos';
+import { initializeTopCryptos, refreshTopCryptos, verifyAssets } from './data/topCryptos';
 import { postDailyPaperReport } from './paper/dailyReport';
 import { detectRegime, isTradeableRegime, setLastRegime, getLastRegimes } from './regime/regimeDetector';
 import { TrendPullbackStrategy } from './strategies/trendPullback';
@@ -599,6 +599,11 @@ async function postDailySummary() {
 export function startScheduler() {
   // Initialise hardcoded asset list (synchronous — no network call)
   initializeTopCryptos();
+
+  // Verify all hardcoded crypto assets are reachable on the exchange.
+  // Non-blocking — runs async in background so startup is not delayed.
+  // Results are logged; unavailable symbols are skipped gracefully at scan time.
+  verifyAssets().catch((err) => logger.warn('[assetVerify] Verification error:', err));
 
   // Reset stale scalp_params.json if it has old aggressive thresholds, then ensure file exists
   resetStaleScalpParams();

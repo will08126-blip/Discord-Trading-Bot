@@ -85,6 +85,14 @@ const COMMAND_SECTIONS = [
         name: '/paper-performance [period]',
         desc: 'Full paper trading stats breakdown. Periods: daily / weekly / all. Includes win rate, profit factor, best/worst trade, and per-strategy results.',
       },
+      {
+        name: '/daily-report [date]',
+        desc: 'Generate today\'s paper trading report as a Markdown file. Paste it into Claude to get improvement suggestions. Optional: pass a date override (YYYY-MM-DD).',
+      },
+      {
+        name: '/paper-reset',
+        desc: 'Wipe all paper trade history and restore the virtual balance to $1,000. Useful when starting a new testing cycle or after major strategy changes.',
+      },
     ],
   },
   {

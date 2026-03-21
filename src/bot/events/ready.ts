@@ -3,6 +3,7 @@ import { ChannelType, EmbedBuilder } from 'discord.js';
 import { deployCommands, commands } from '../commands/index';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { CRYPTO_ASSETS } from '../../data/topCryptos';
 
 export async function onReady(client: Client): Promise<void> {
   logger.info(`Discord bot ready — logged in as ${client.user?.tag}`);
@@ -115,34 +116,84 @@ export async function onReady(client: Client): Promise<void> {
     logger.error('Command deployment failed:', err);
   }
 
-  // ── Post startup confirmation to signal channel ────────────────────────────
-  // This lets the user see in Discord that commands are ready and what they're called.
+  // ── Post startup messages to both channels ─────────────────────────────────
+  // #bot-signals  → command list + "manual trading" explanation
+  // #paper-trading → "automated bot learning loop" explanation
+  // Both messages post on every restart so the purpose of each channel is always clear.
+
+  const commandList = [...commands.keys()]
+    .map((name) => `\`/${name}\``)
+    .join('  ');
+
+  // --- #bot-signals ---
   try {
     const channel = await client.channels.fetch(config.discord.signalChannelId);
-    if (!channel?.isTextBased()) return;
+    if (channel?.isTextBased()) {
+      const embed = new EmbedBuilder()
+        .setColor(deployError ? 0xff4444 : 0x00ff87)
+        .setTitle(deployError ? '⚠️ Bot Online — Command Registration Failed' : '✅ #bot-signals — Live Trading Channel')
+        .setDescription(
+          deployError
+            ? `Commands could not be registered: \`${deployError}\`\n\nSlash commands may not be available. Check the bot logs.`
+            : [
+                `**What this channel is:** Swing and hybrid trade signals for your manual trading.`,
+                `The bot scans ${[...CRYPTO_ASSETS].map((s) => s.split('/')[0]).join(', ')} + XAU, XAG, QQQ, SPY every few minutes.`,
+                `When a **SWING** or **HYBRID** setup scores highly, a signal card is posted here.`,
+                `Scalp trades do NOT appear here — they go to #paper-trading only.`,
+                '',
+                `**Your job:** Review the signal, decide if you want to trade it on your exchange, click ✅ Entered, then 🔴 Close when you exit.`,
+                '',
+                `All slash commands are now ${guildId ? '**instantly available**' : 'registered globally (may take up to 1h)'}.`,
+                '',
+                '**Commands:** ' + commandList,
+              ].join('\n')
+        )
+        .setFooter({ text: `${client.user?.tag} · Paper-trading runs separately in #paper-trading` })
+        .setTimestamp();
 
-    const commandList = [...commands.keys()]
-      .map((name) => `\`/${name}\``)
-      .join('  ');
-
-    const embed = new EmbedBuilder()
-      .setColor(deployError ? 0xff4444 : 0x00ff87)
-      .setTitle(deployError ? '⚠️ Bot Online — Command Registration Failed' : '✅ Bot Online — Commands Ready')
-      .setDescription(
-        deployError
-          ? `Commands could not be registered: \`${deployError}\`\n\nSlash commands may not be available. Check the bot logs.`
-          : [
-              `All slash commands are now ${guildId ? '**instantly available**' : 'registered globally (may take up to 1h)'}.`,
-              '',
-              '**Available commands:**',
-              commandList,
-            ].join('\n')
-      )
-      .setFooter({ text: `Logged in as ${client.user?.tag}` })
-      .setTimestamp();
-
-    await (channel as TextChannel).send({ embeds: [embed] });
+      await (channel as TextChannel).send({ embeds: [embed] });
+    }
   } catch (err) {
-    logger.warn('Could not post startup confirmation message:', err);
+    logger.warn('Could not post startup message to #bot-signals:', err);
+  }
+
+  // --- #paper-trading ---
+  if (config.discord.paperChannelId && config.discord.paperChannelId !== config.discord.signalChannelId) {
+    try {
+      const paperCh = await client.channels.fetch(config.discord.paperChannelId);
+      if (paperCh?.isTextBased()) {
+        const paperEmbed = new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle('📄 #paper-trading — Automated Bot Learning Loop')
+          .setDescription(
+            [
+              `**What this channel is:** The bot's own automated trading account — fully hands-off.`,
+              '',
+              `Every signal the bot generates (SWING, HYBRID, and SCALP) is auto-entered here in a **virtual $1,000 account**.`,
+              `No action is needed from you — entries and exits happen automatically.`,
+              '',
+              `**Why it exists:** To measure the bot's raw strategy performance in real-time.`,
+              `Every Sunday the bot analyses its own win rate by asset, hour, market regime, and indicator, then auto-tunes its parameters.`,
+              '',
+              `**Scheduled posts in this channel:**`,
+              `• **12:00 UTC** — midday balance check-in`,
+              `• **23:59 UTC** — full daily report (attach to Claude to improve the bot)`,
+              `• **Sunday 00:00 UTC** — weekly self-improvement analysis`,
+              '',
+              `**This is separate from #bot-signals.** Same strategies, but different purpose:`,
+              `#bot-signals = signals for YOU to trade manually`,
+              `#paper-trading = the bot evaluating itself with zero risk`,
+              '',
+              `Use \`/paper-reset\` to wipe and restart the virtual account at any time.`,
+            ].join('\n')
+          )
+          .setFooter({ text: `${client.user?.tag} · No real money is ever at risk` })
+          .setTimestamp();
+
+        await (paperCh as TextChannel).send({ embeds: [paperEmbed] });
+      }
+    } catch (err) {
+      logger.warn('Could not post startup message to #paper-trading:', err);
+    }
   }
 }

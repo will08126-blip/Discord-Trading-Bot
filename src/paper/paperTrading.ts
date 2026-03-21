@@ -428,6 +428,31 @@ export function getOpenPaperPositions(): PaperTrade[] {
   return loadPaperTrades().filter((t) => t.status === 'active');
 }
 
+/**
+ * Hard-reset the paper trading account.
+ * Closes all open positions immediately (no P&L recorded), wipes trade history,
+ * and restores the virtual balance to the configured starting balance.
+ * Returns the new starting balance for confirmation messaging.
+ */
+export function resetPaperTrading(): number {
+  ensureDataDir();
+  const startingBalance = config.paper.startingBalance;
+
+  // Wipe all trades
+  savePaperTrades([]);
+
+  // Reset state to fresh starting balance
+  const freshState: PaperState = {
+    virtualBalance: startingBalance,
+    startingBalance,
+    lastUpdated: new Date().toISOString(),
+  };
+  savePaperState(freshState);
+
+  logger.info(`[paperTrading] Account reset — balance restored to $${startingBalance.toFixed(2)}, all trade history wiped`);
+  return startingBalance;
+}
+
 export function getPaperHistory(count: number): PaperTrade[] {
   const trades = loadPaperTrades().filter((t) => t.status === 'closed');
   return trades.slice(-count).reverse();
