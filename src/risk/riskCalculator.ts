@@ -1,4 +1,4 @@
-import type { StrategySignal, TradeType, ScoreTier } from '../types';
+import type { StrategySignal, TradeType, ScoreTier, Regime } from '../types';
 import { config } from '../config';
 
 export interface RiskParameters {
@@ -29,6 +29,25 @@ const RISK_PCT: Record<string, Record<ScoreTier, number>> = {
   // but larger notional position — e.g. 5% risk / 2% stop = 2.5× notional at 2.5× leverage).
   swing:  { ELITE: 5.0, STRONG: 3.0, MEDIUM: 1.5, NO_TRADE: 0 },
 };
+
+// Regime multipliers: adjust risk percentage based on market regime
+function getRegimeMultiplier(regime: Regime): number {
+  switch (regime) {
+    case 'TREND_UP':
+    case 'TREND_DOWN':
+      return 1.0;
+    case 'RANGE':
+      return 0.9;
+    case 'VOL_EXPANSION':
+      return 0.7;
+    case 'LOW_VOL_COMPRESSION':
+      return 0.8;
+    case 'POOR':
+      return 0.0; // Should never happen (filtered out earlier)
+    default:
+      return 1.0;
+  }
+}
 
 function leverageCap(tier: ScoreTier, tradeType: TradeType): number {
   const typeKey = tradeType === 'SCALP' ? 'scalp' : tradeType === 'HYBRID' ? 'hybrid' : 'swing';
@@ -82,7 +101,9 @@ export function calculateRisk(signal: StrategySignal): RiskParameters {
   const typeKey = tradeType === 'SCALP' ? 'scalp' : tradeType === 'HYBRID' ? 'hybrid' : 'swing';
 
   // Confidence-based risk %
-  const riskPct = RISK_PCT[typeKey][signal.tier] ?? 1.0;
+  const rawRiskPct = RISK_PCT[typeKey][signal.tier] ?? 1.0;
+  const regimeMultiplier = getRegimeMultiplier(signal.regime);
+  const riskPct = rawRiskPct * regimeMultiplier;
 
   const assetCap = config.assetLeverageCap[signal.asset] ?? Infinity;
   const maxLev = leverageCap(signal.tier, tradeType);

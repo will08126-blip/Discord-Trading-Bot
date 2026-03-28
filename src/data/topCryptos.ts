@@ -75,7 +75,15 @@ export async function verifyAssets(): Promise<AssetVerificationResult> {
 
   let exchange: any;
   try {
-    exchange = new ccxt[exchangeId]({ enableRateLimit: true, timeout: 10000 });
+    const options: any = { enableRateLimit: true, timeout: 10000 };
+    if (exchangeId === 'binance' || exchangeId === 'binanceusdm') {
+      options.options = { defaultType: 'future' };
+    } else if (exchangeId === 'gate' || exchangeId === 'gateio') {
+      options.options = { defaultType: 'future' };
+    } else if (exchangeId === 'mexc') {
+      options.options = { defaultType: 'future' };
+    }
+    exchange = new ccxt[exchangeId](options);
   } catch (err) {
     logger.warn(`[assetVerify] Could not instantiate exchange "${exchangeId}": ${err}`);
     return { ok: [], failed: [...CRYPTO_ASSETS] };

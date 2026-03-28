@@ -132,10 +132,17 @@ In your Render service → **Environment** tab, add:
 | `BINANCE_API_KEY` | from Part 3 |
 | `BINANCE_SECRET` | from Part 3 |
 | `ANTHROPIC_API_KEY` | from Part 4 (optional) |
+| `EXCHANGE_ID` | exchange for market data (default `binance` for Binance Futures) |
 | `ACCOUNT_CAPITAL` | your account size in USD (e.g. `10000`) |
 | `RISK_PER_TRADE` | dollar risk per trade (e.g. `50`) |
 | `MAX_DAILY_LOSS` | stop scanning if daily loss exceeds this (e.g. `150`) |
 | `MIN_SCORE_THRESHOLD` | minimum score to post signal (default `60`) |
+| `MAX_LEVERAGE_SCALP` | hard cap for scalp trades (default `20`) |
+| `MAX_LEVERAGE_HYBRID` | hard cap for hybrid trades (default `50`) |
+| `MAX_LEVERAGE_SWING` | hard cap for swing trades (default `10`) |
+| `SCAN_INTERVAL_MINUTES` | how often to scan for setups (default `5`) |
+
+**Futures Configuration:** The bot uses Binance Futures endpoints by default (exchange ID `binance`). Leverage caps have been reduced for safety: scalp trades max 20x, swing trades max 10x. Adjust `MAX_LEVERAGE_SCALP` and `MAX_LEVERAGE_SWING` accordingly.
 
 ### 5.4 — Add Persistent Disk
 
