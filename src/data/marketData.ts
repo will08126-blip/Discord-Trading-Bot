@@ -28,10 +28,19 @@ function resolveStartIndex(): number {
 function getPooledExchange(id: string): any {
   if (!exchangePool[id]) {
     logger.info(`[marketData] Initialising exchange: ${id}`);
-    exchangePool[id] = new ccxt[id]({
+    const options: any = {
       enableRateLimit: true,
       timeout: 10000,
-    });
+    };
+    // Configure for futures trading where applicable
+    if (id === 'binance' || id === 'binanceusdm') {
+      options.options = { defaultType: 'future' };
+    } else if (id === 'gate' || id === 'gateio') {
+      options.options = { defaultType: 'future' };
+    } else if (id === 'mexc') {
+      options.options = { defaultType: 'future' };
+    }
+    exchangePool[id] = new ccxt[id](options);
   }
   return exchangePool[id];
 }
@@ -150,6 +159,28 @@ export async function fetchCurrentPrice(asset: Asset): Promise<number> {
     throw new Error(`Could not determine current price for ${asset} — ticker fields all null/zero`);
   }
   return price;
+}
+
+/**
+ * Fetch the current bid-ask spread for a given asset.
+ * Returns the spread as a percentage (ask - bid) / mid price.
+ * For Yahoo assets, returns a default spread (0.0001).
+ */
+export async function fetchSpread(asset: Asset): Promise<number> {
+  if (isYahooAsset(asset)) {
+    // Yahoo Finance doesn't provide bid/ask for futures; assume tight spread
+    return 0.0001;
+  }
+  const ticker = await withFallback<any>((ex) => ex.fetchTicker(asset));
+  const bid = ticker.bid;
+  const ask = ticker.ask;
+  if (bid != null && ask != null && bid > 0 && ask > bid) {
+    const mid = (bid + ask) / 2;
+    return (ask - bid) / mid;
+  }
+  // Fallback: use a default based on asset liquidity
+  const lowLiq = ['BONK/USDT', 'SHIB/USDT', 'PEPE/USDT', 'FLOKI/USDT'].includes(asset);
+  return lowLiq ? 0.0015 : 0.0007;
 }
 
 export async function fetchAllAssets(): Promise<MultiTimeframeData[]> {

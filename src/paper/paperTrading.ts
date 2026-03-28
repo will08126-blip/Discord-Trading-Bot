@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { TextChannel } from 'discord.js';
 import { EmbedBuilder } from 'discord.js';
 import type { StrategySignal, PaperTrade, PaperState, PaperCloseReason, ScalpEntryMetadata } from '../types';
-import { fetchCurrentPrice, fetchOHLCV } from '../data/marketData';
+import { fetchCurrentPrice, fetchOHLCV, fetchSpread } from '../data/marketData';
 import type { Asset } from '../types';
 import { config } from '../config';
 import { logger } from '../utils/logger';
@@ -24,6 +24,8 @@ const PAPER_CB_LOSS_COUNT   = 5;     // consecutive losses before circuit breake
 const PAPER_CB_COOLDOWN_MIN = 60;    // minutes to pause after circuit breaker triggers
 const PAPER_BLOWN_THRESHOLD = 50;    // balance floor — auto-reset below this
 const PAPER_RESET_DELAY_MIN = 10;    // minutes to wait before resetting blown account
+const MAKER_FEE = 0.0002;             // 0.02% maker fee (Binance Futures)
+const TAKER_FEE = 0.0002;             // 0.02% taker fee (Binance Futures)
 
 // ─── Slippage model ───────────────────────────────────────────────────────────
 // Low-liquidity / meme coins face wider spreads than major pairs.
@@ -38,8 +40,28 @@ function isLowLiq(asset: string): boolean {
   return base.includes('INU') || base.includes('DOGE');
 }
 
-function getSlipPct(asset: string): number {
-  return isLowLiq(asset) ? 0.0015 : 0.0007;
+async function getSlipPct(asset: string): Promise<number> {
+  // Base spread from exchange
+  let spread = await fetchSpread(asset as Asset);
+  
+  // Time-of-day adjustment: lower liquidity during Asian session (00:00-08:00 UTC) and weekend
+  const now = new Date();
+  const hourUTC = now.getUTCHours();
+  const dayOfWeek = now.getUTCDay(); // 0 = Sunday
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  
+  // Increase spread during low liquidity periods
+  if (hourUTC >= 0 && hourUTC < 8) {
+    spread *= 1.5; // Asian session lower liquidity
+  }
+  if (isWeekend) {
+    spread *= 1.2;
+  }
+  
+  // Ensure minimum spread for low-liq assets
+  const lowLiq = isLowLiq(asset);
+  const minSpread = lowLiq ? 0.0015 : 0.0007;
+  return Math.max(spread, minSpread);
 }
 
 // ─── State persistence ────────────────────────────────────────────────────────
@@ -476,7 +498,7 @@ export async function enterPaperTrade(
     }
 
     // ── Risk calculation ──────────────────────────────────────────────────
-    const slip   = getSlipPct(signal.asset);
+    const slip   = await getSlipPct(signal.asset);
     const isLong = signal.direction === 'LONG';
     const isScalp = signal.tradeType === 'SCALP';
 
@@ -633,7 +655,7 @@ export async function checkPaperPositions(channel: TextChannel): Promise<void> {
 
       if (triggered) {
         // Fill the order — apply slippage on fill
-        const slip       = getSlipPct(trade.asset);
+        const slip       = await getSlipPct(trade.asset);
         const fillPrice  = isLong
           ? limitPrice * (1 + slip)
           : limitPrice * (1 - slip);
@@ -700,19 +722,24 @@ export async function checkPaperPositions(channel: TextChannel): Promise<void> {
         const pnlR      = stopDistPct > 0 ? pnlPct / stopDistPct : 0;
         const pnlDollar = pnlR * trade.positionSizeDollars;
 
+        // Fee calculation (Binance Futures: 0.02% taker fee per side)
+        const notional = stopDistPct > 0 ? trade.positionSizeDollars / stopDistPct : trade.positionSizeDollars;
+        const fee = notional * TAKER_FEE * 2; // entry + exit
+        const netPnl = pnlDollar - fee;
+
         const closeTime = new Date().toISOString();
 
         trade.status      = 'closed';
         trade.closeTime   = closeTime;
         trade.exitPrice   = exitPrice;
-        trade.pnlDollar   = pnlDollar;
+        trade.pnlDollar   = netPnl;
         trade.pnlR        = pnlR;
         trade.pnlPct      = pnlPct;
         trade.holdMinutes = holdMinutes;
         trade.closeReason = closeReason;
-        trade.balanceAfter = state.virtualBalance + pnlDollar;
+        trade.balanceAfter = state.virtualBalance + netPnl;
 
-        state.virtualBalance += pnlDollar;
+        state.virtualBalance += netPnl;
         stateChanged = true;
 
         // ── Consecutive loss tracking ────────────────────────────────────

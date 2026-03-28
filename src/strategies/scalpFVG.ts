@@ -222,8 +222,8 @@ export class ScalpFVGStrategy extends BaseStrategy {
       ? currentPrice + stopDist * rrMult
       : currentPrice - stopDist * rrMult;
 
-    const entryLow  = currentPrice * 0.9995;
-    const entryHigh = currentPrice * 1.0005;
+    const entryLow  = currentPrice * 0.9998;
+    const entryHigh = currentPrice * 1.0002;
 
     // ── Scoring ───────────────────────────────────────────────────────────────
     const components = this.zeroComponents();

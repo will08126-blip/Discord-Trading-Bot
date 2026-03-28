@@ -375,8 +375,11 @@ export function isDuplicateSignal(signal: StrategySignal): boolean {
   const key = `${signal.asset}:${signal.direction}:${signal.strategy}`;
   const lastSent = recentlySentAssets.get(key);
   const now = Date.now();
+  const windowMs = signal.tradeType === 'SWING' 
+    ? config.engine.duplicateWindowMsSwing 
+    : config.engine.duplicateWindowMs;
   // Prune expired entry on access to prevent unbounded map growth
-  if (lastSent !== undefined && now - lastSent >= config.engine.duplicateWindowMs) {
+  if (lastSent !== undefined && now - lastSent >= windowMs) {
     recentlySentAssets.delete(key);
     return false;
   }

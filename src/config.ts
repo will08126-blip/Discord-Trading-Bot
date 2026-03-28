@@ -55,13 +55,15 @@ export const config = {
     maxLeverageSwing:  optionalNum('MAX_LEVERAGE_SWING',  10),
     earlyProfitAlertPct: optionalNum('EARLY_PROFIT_ALERT_PCT', 0.25),
     targetReturnPct:     optionalNum('TARGET_RETURN_PCT',      0),
+    autoExecuteEnabled: optionalBool('AUTO_EXECUTE_ENABLED', false),
   },
 
   engine: {
     scanIntervalMinutes: optionalNum('SCAN_INTERVAL_MINUTES', 5),
     enabled: optionalBool('ENABLED', true),
     exchangeId: optionalEnv('EXCHANGE_ID', 'binance'),
-    duplicateWindowMs: 30 * 60 * 1000,
+    duplicateWindowMs: 30 * 60 * 1000,          // 30 minutes for scalp/hybrid
+    duplicateWindowMsSwing: 60 * 60 * 1000,      // 1 hour for swing signals
     staleThresholds: {
       '1w':  2 * 7 * 24 * 60 * 60 * 1000,
       '1d':  2 * 24 * 60 * 60 * 1000,
@@ -99,7 +101,7 @@ export const config = {
 
   // SWING leverage is TIER-BASED (not dynamic). User target: 5-10x.
   leverageTiers: {
-    scalp:  { ELITE: 75, STRONG: 50, MEDIUM: 20, NO_TRADE: 0 },
+    scalp:  { ELITE: 20, STRONG: 15, MEDIUM: 10, NO_TRADE: 0 },
     hybrid: { ELITE: 50, STRONG: 35, MEDIUM: 15, NO_TRADE: 0 },
     swing:  { ELITE: 10, STRONG: 8,  MEDIUM: 5,  NO_TRADE: 0 },
   } as Record<string, Record<string, number>>,
@@ -111,11 +113,20 @@ export const config = {
   },
 
   assetLeverageCap: {
+    'BTC/USDT': 20,
+    'ETH/USDT': 20,
+    'SOL/USDT': 20,
+    'XRP/USDT': 20,
+    'PEPE/USDT': 20,
     'XAU/USD': 10,
     'XAG/USD': 10,
     'QQQ/USD': 5,
     'SPY/USD': 5,
   } as Partial<Record<string, number>>,
+  exchangeApi: {
+    binanceApiKey: optionalEnv('BINANCE_API_KEY', ''),
+    binanceSecret: optionalEnv('BINANCE_SECRET', ''),
+  },
 };
 
 export type Config = typeof config;
