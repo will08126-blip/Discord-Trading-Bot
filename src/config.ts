@@ -116,6 +116,10 @@ export const config = {
     'QQQ/USD': 5,
     'SPY/USD': 5,
   } as Partial<Record<string, number>>,
+  
+  claw: {
+    webhookSecret: optionalEnv('CLAW_WEBHOOK_SECRET', ''),
+  },
 };
 
 export type Config = typeof config;

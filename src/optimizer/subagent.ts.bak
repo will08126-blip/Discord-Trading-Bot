@@ -1,13 +1,47 @@
+import { execSync } from 'child_process';
+import { sessions_spawn } from '../../../openclaw/sessions';
 import { logger } from '../utils/logger';
+import { config } from '../config';
 import type { PerformanceData, OptimizationAnalysis } from './types';
 
 /**
- * Analyzes trading performance and recommends optimizations.
- * Uses rule-based fallback analysis (OpenClaw subagent not available in this environment).
+ * Spawns a subagent to analyze trading performance and recommend optimizations.
+ * This replaces the direct Claude API call with an OpenClaw subagent session.
  */
 export async function analyzeWithSubagent(data: PerformanceData): Promise<OptimizationAnalysis> {
-  logger.info('[Subagent] Using fallback rule-based analysis (subagent unavailable)');
-  return generateFallbackAnalysis(data);
+  logger.info('[Subagent] Spawning optimization analysis agent...');
+
+  const taskPrompt = buildSubagentTaskPrompt(data);
+
+  try {
+    // Spawn a subagent session for the analysis
+    const result = await sessions_spawn({
+      runtime: 'subagent',
+      mode: 'run',
+      task: taskPrompt,
+      timeoutSeconds: 120,
+      sandbox: 'inherit',
+    });
+
+    // Parse the result - expect JSON output from subagent
+    const response = result.output || result.result || '';
+    
+    // Extract JSON from response
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('No JSON found in subagent response');
+    }
+
+    const analysis: OptimizationAnalysis = JSON.parse(jsonMatch[0]);
+    
+    logger.info(`[Subagent] Analysis complete. Confidence: ${analysis.confidence}`);
+    return analysis;
+
+  } catch (error) {
+    logger.error('[Subagent] Analysis failed:', error);
+    // Fallback to simple rule-based analysis if subagent fails
+    return generateFallbackAnalysis(data);
+  }
 }
 
 /**
@@ -97,8 +131,10 @@ Requirements:
 - Confidence 1-10 based on data quality
 - If no changes warranted, return action: "NO_CHANGE"
 
-Respond ONLY with the JSON. No other text.`;
+Respond ONLY with the JSON. No other text.`,
+    });
 }
+
 /**
  * Fallback rule-based analysis if subagent fails
  */

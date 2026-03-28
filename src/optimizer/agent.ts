@@ -3,7 +3,7 @@ import path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config';
 import { logger } from '../utils/logger';
-import { analyzeTradePerformance, getPerformanceSummary } from './analyzer';
+// import { analyzeTradePerformance, getPerformanceSummary } from './analyzer';
 import { createOptimizationPR } from './github';
 import { buildAnalysisPrompt, buildParameterPrompt, formatProposedChanges } from './prompts';
 import type { OptimizationAnalysis, PerformanceData, ProposedChanges } from './types';
