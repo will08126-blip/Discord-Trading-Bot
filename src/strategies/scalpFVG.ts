@@ -1,7 +1,7 @@
 /**
  * ScalpFVG Strategy — Multi-Confluence Scalp
  *
- * Entry requires ALL of these layers (paper trading auto-enters everything ≥ 45 pts):
+ * Entry requires ALL of these layers (paper trading auto-enters everything ≥ 60 pts):
  *
  *   LAYER 1 — FVG ZONE  (Fair Value Gap on 1m or 5m)
  *     An unfilled imbalance near current price confirms supply/demand imbalance.
@@ -23,7 +23,7 @@
  *   LAYER 6 — VOLUME CONFIRMATION
  *     Volume spike or above-average volume required.
  *
- * Score gate: ≥ 45 / 100 for paper trading.
+ * Score gate: ≥ 60 / 100 for paper trading.
  * High-quality scalps (HYBRID type) still post to #bot-signals when score ≥ 65.
  *
  * Stop: beyond FVG zone + 0.5×ATR(1m).
@@ -64,14 +64,18 @@ export class ScalpFVGStrategy extends BaseStrategy {
     const dayOfWeek   = nowUtc.getUTCDay(); // 0=Sun, 6=Sat
     const isWeekend   = dayOfWeek === 0 || dayOfWeek === 6;
 
+    // Skip weekends entirely (low liquidity, noisy FVGs)
+    if (isWeekend) return null;
+
     // Hard blacklist: 12:00–13:00 UTC = London lunch.
     // First live session showed 7 trades, 0 wins in this window.
     // Low volume + directionless chop = no edge for FVG scalps.
     if (hourUtc === 12) return null;
+    // Only trade during London and NY sessions (8:00-16:00 UTC)
+    if (hourUtc < 8 || hourUtc >= 16) return null;
 
-    // Weekend score penalty applied later in scoring — store flag here.
-    // Weekends: lower institutional volume → FVGs are noisier, less likely to fill with momentum.
-    const weekendScorePenalty = isWeekend ? 8 : 0;
+    // Weekends are skipped entirely (low liquidity, noisy FVGs).
+    const weekendScorePenalty = 0;
 
     const n1 = candles1m.length - 1;
     const n5 = candles5m.length  - 1;
@@ -170,8 +174,8 @@ export class ScalpFVGStrategy extends BaseStrategy {
     let isLong: boolean;
     let fvgZone: typeof bestBullFVG;
 
-    const longOk  = Boolean(bestBullFVG && macdBull && bullTrend && (vwapBullish || vwapConflict));
-    const shortOk = Boolean(bestBearFVG && macdBear && bearTrend && (vwapBearish || vwapConflict));
+    const longOk  = Boolean(bestBullFVG && macdBull && bothBull && (vwapBullish || vwapConflict));
+    const shortOk = Boolean(bestBearFVG && macdBear && bothBear && (vwapBearish || vwapConflict));
 
     if (longOk && !shortOk) {
       isLong  = true;
@@ -191,10 +195,9 @@ export class ScalpFVGStrategy extends BaseStrategy {
 
     if (!fvgZone) return null;
 
-    // Price must be in or approaching the FVG zone
+    // Price must be inside the FVG zone
     const inZone    = isPriceInFVG(currentPrice, fvgZone, 0.003);
-    const approaching = Math.abs(currentPrice - fvgZone.midpoint) / currentPrice < 0.005;
-    if (!inZone && !approaching) return null;
+    if (!inZone) return null;
 
     // ── RSI overextension guard ───────────────────────────────────────────────
     const rsi5m = cachedRsi(candles5m, 14)[n5];
@@ -208,8 +211,8 @@ export class ScalpFVGStrategy extends BaseStrategy {
     if (isNaN(atr1m) || atr1m <= 0) return null;
 
     const stopLoss = isLong
-      ? fvgZone.gapLow  - atr1m * 0.5
-      : fvgZone.gapHigh + atr1m * 0.5;
+      ? fvgZone.gapLow  - atr1m * 1.0
+      : fvgZone.gapHigh + atr1m * 1.0;
 
     const stopDist = Math.abs(currentPrice - stopLoss);
     if (stopDist <= 0) return null;
@@ -270,15 +273,14 @@ export class ScalpFVGStrategy extends BaseStrategy {
 
     const score = this.totalScore(components);
 
-    // Apply weekend penalty: on Sat/Sun require 8 extra points above the normal gate.
-    // This filters out the noisier FVGs that form during low-volume weekend sessions.
-    const effectiveScore = score - weekendScorePenalty;
+    // Weekends are skipped entirely, so no penalty needed.
+    const effectiveScore = score;
 
-    // Scalp gate: 45 minimum (before penalty); hybrids ≥ 65 posted to #bot-signals
+    // Scalp gate: 60 minimum; hybrids ≥ 70 posted to #bot-signals
     const tier: ScoreTier =
-      effectiveScore >= 80 ? 'ELITE' :
-      effectiveScore >= 60 ? 'STRONG' :
-      effectiveScore >= 45 ? 'MEDIUM' :
+      effectiveScore >= 85 ? 'ELITE' :
+      effectiveScore >= 70 ? 'STRONG' :
+      effectiveScore >= 60 ? 'MEDIUM' :
       'NO_TRADE';
 
     if (tier === 'NO_TRADE') return null;

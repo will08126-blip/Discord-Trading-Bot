@@ -199,7 +199,7 @@ function buildPaperFilledEmbed(
       `Balance remaining: $${balanceRemaining.toFixed(2)} | Strategy: ${trade.strategy}`
     )
     .setTimestamp()
-    .setFooter({ text: `Paper Trade · ID: ${trade.id.slice(0, 8)}` });
+    .setFooter({ text: `Paper Trade · ID: ${trade.id.slice(0, 8)} · ${trade.tradeType} · ${trade.strategy}` });
   return { embeds: [embed] };
 }
 
@@ -220,7 +220,7 @@ function buildPaperEntryEmbed(
       `Balance remaining: $${balanceRemaining.toFixed(2)} | Strategy: ${trade.strategy}`
     )
     .setTimestamp()
-    .setFooter({ text: `Paper Trade · ID: ${trade.id.slice(0, 8)}` });
+    .setFooter({ text: `Paper Trade · ID: ${trade.id.slice(0, 8)} · ${trade.tradeType} · ${trade.strategy}` });
   return { embeds: [embed] };
 }
 
@@ -254,7 +254,7 @@ function buildPaperCloseEmbed(trade: PaperTrade): { embeds: EmbedBuilder[] } {
       `**Reason:** ${trade.closeReason ?? 'unknown'} | **Hold:** ${trade.holdMinutes ?? 0}min | **Balance:** $${(trade.balanceAfter ?? 0).toFixed(2)}`
     )
     .setTimestamp()
-    .setFooter({ text: `Paper Trade · Strategy: ${trade.strategy}` });
+    .setFooter({ text: `Paper Trade · ${trade.tradeType} · ${trade.strategy}` });
   return { embeds: [embed] };
 }
 
