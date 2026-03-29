@@ -67,10 +67,10 @@ export interface AdjustmentRecord {
 // scalp signals never post there regardless of this score gate.
 
 export const DEFAULT_SCALP_PARAMS: ScalpParams = {
-  // Score gate: lowered to 55 for aggressive stress-testing.
-  // More signals through = more data faster = faster learning.
+  // Score gate: increased to 60 for better signal quality.
+  // Fewer signals but higher win rate expected.
   // Hybrid keeps 68 to protect the #bot-signals manual-trading channel.
-  minScoreScalp: 55,
+  minScoreScalp: 60,
   minScoreHybrid: 68,
   bypassSwingGateForScalps: true,
   allowedRegimes: ['TREND_UP', 'TREND_DOWN', 'RANGE', 'VOL_EXPANSION', 'LOW_VOL_COMPRESSION'],
