@@ -14,7 +14,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
   await interaction.deferReply({ ephemeral: false });
 
   try {
-    const startingBalance = resetPaperTrading();
+    const startingBalance = await resetPaperTrading();
 
     const embed = new EmbedBuilder()
       .setColor(0xffa500)
