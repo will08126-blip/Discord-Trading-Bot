@@ -27,6 +27,14 @@ const PAPER_RESET_DELAY_MIN = 10;    // minutes to wait before resetting blown a
 const MAKER_FEE = 0.0002;             // 0.02% maker fee (Binance Futures)
 const TAKER_FEE = 0.0002;             // 0.02% taker fee (Binance Futures)
 
+// ─── Async lock for state updates ─────────────────────────────────────────────
+let stateLock: Promise<any> = Promise.resolve();
+function withStateLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = stateLock.then(() => fn());
+  stateLock = result.catch(() => {}) as Promise<any>; // continue lock chain even if error
+  return result;
+}
+
 // ─── Slippage model ───────────────────────────────────────────────────────────
 // Low-liquidity / meme coins face wider spreads than major pairs.
 
@@ -42,7 +50,15 @@ function isLowLiq(asset: string): boolean {
 
 async function getSlipPct(asset: string): Promise<number> {
   // Base spread from exchange
-  let spread = await fetchSpread(asset as Asset);
+  let spread: number;
+  try {
+    spread = await fetchSpread(asset as Asset);
+  } catch (err) {
+    logger.warn(`paperTrading: fetchSpread failed for ${asset}, using default:`, err);
+    // Fallback default spread based on liquidity
+    const lowLiq = isLowLiq(asset);
+    spread = lowLiq ? 0.0015 : 0.0007;
+  }
   
   // Time-of-day adjustment: lower liquidity during Asian session (00:00-08:00 UTC) and weekend
   const now = new Date();
@@ -460,7 +476,7 @@ export async function enterPaperTrade(
 ): Promise<void> {
   if (!config.paper.enabled) return;
 
-  try {
+  await withStateLock(async () => {
     let state = loadPaperState();
 
     // ── Blown account cooldown ────────────────────────────────────────────
@@ -582,9 +598,8 @@ export async function enterPaperTrade(
         `(slippage=${(slip * 100).toFixed(2)}%, id=${trade.id.slice(0, 8)})`
       );
     }
-  } catch (err) {
-    logger.error('paperTrading: enterPaperTrade error:', err);
-  }
+  });
+
 }
 
 /**
@@ -598,191 +613,193 @@ export async function enterPaperTrade(
 export async function checkPaperPositions(channel: TextChannel): Promise<void> {
   if (!config.paper.enabled) return;
 
-  // ── Blown account handling ─────────────────────────────────────────────────
-  const stateCheck = loadPaperState();
-  if (stateCheck.blownAt) {
-    const msElapsed = Date.now() - new Date(stateCheck.blownAt).getTime();
-    if (msElapsed >= PAPER_RESET_DELAY_MIN * 60 * 1000) {
-      await performAccountReset(stateCheck, channel);
-    } else {
-      const minsLeft = Math.ceil((PAPER_RESET_DELAY_MIN * 60 * 1000 - msElapsed) / 60000);
-      logger.debug(`paperTrading: blown cooldown — ${minsLeft}min until auto-reset, skipping position check`);
-    }
-    return;
-  }
-
-  const trades = loadPaperTrades();
-  const pendingTrades = trades.filter((t) => t.status === 'pending');
-  const activeTrades  = trades.filter((t) => t.status === 'active');
-
-  if (pendingTrades.length === 0 && activeTrades.length === 0) return;
-
-  const state: PaperState = loadPaperState();
-  let stateChanged  = false;
-  let tradesChanged = false;
-
-  // ── Process pending orders ──────────────────────────────────────────────────
-  for (const trade of pendingTrades) {
-    try {
-      const currentPrice = await fetchCurrentPrice(trade.asset as Asset);
-      trade.currentPrice = currentPrice;
-      tradesChanged = true;
-
-      const isLong = trade.direction === 'LONG';
-      const limitPrice = trade.pendingEntryPrice!;
-
-      // Check expiry first
-      if (trade.pendingExpiresAt && Date.now() > new Date(trade.pendingExpiresAt).getTime()) {
-        trade.status      = 'closed';
-        trade.closeTime   = new Date().toISOString();
-        trade.closeReason = 'pending expired';
-        trade.exitPrice   = currentPrice;
-        trade.pnlDollar   = 0;
-        trade.pnlR        = 0;
-        trade.pnlPct      = 0;
-        trade.holdMinutes = 0;
-        trade.balanceAfter = state.virtualBalance;
-
-        await channel.send(buildPaperExpiredEmbed(trade));
-        logger.info(`paperTrading: pending expired for ${trade.asset} @ limit=${limitPrice} (id=${trade.id.slice(0, 8)})`);
-        continue;
+  await withStateLock(async () => {
+    // ── Blown account handling ─────────────────────────────────────────────────
+    const stateCheck = loadPaperState();
+    if (stateCheck.blownAt) {
+      const msElapsed = Date.now() - new Date(stateCheck.blownAt).getTime();
+      if (msElapsed >= PAPER_RESET_DELAY_MIN * 60 * 1000) {
+        await performAccountReset(stateCheck, channel);
+      } else {
+        const minsLeft = Math.ceil((PAPER_RESET_DELAY_MIN * 60 * 1000 - msElapsed) / 60000);
+        logger.debug(`paperTrading: blown cooldown — ${minsLeft}min until auto-reset, skipping position check`);
       }
-
-      // Check if price has reached the limit
-      const triggered = isLong
-        ? currentPrice <= limitPrice
-        : currentPrice >= limitPrice;
-
-      if (triggered) {
-        // Fill the order — apply slippage on fill
-        const slip       = await getSlipPct(trade.asset);
-        const fillPrice  = isLong
-          ? limitPrice * (1 + slip)
-          : limitPrice * (1 - slip);
-        const slippageDollar = Math.abs(fillPrice - limitPrice);
-
-        trade.status     = 'active';
-        trade.entryPrice = fillPrice;
-        // openTime stays the same — when the pending order was placed
-
-        await channel.send(buildPaperFilledEmbed(trade, slippageDollar, slip, state.virtualBalance));
-        logger.info(
-          `paperTrading: pending filled ${trade.direction} ${trade.asset} @ ${fillPrice.toFixed(4)} ` +
-          `(limit=${limitPrice}, slip=${(slip * 100).toFixed(2)}%, id=${trade.id.slice(0, 8)})`
-        );
-      }
-    } catch (err) {
-      logger.warn(`paperTrading: error processing pending trade ${trade.id.slice(0, 8)}:`, err);
+      return;
     }
-  }
 
-  // ── Process active positions ────────────────────────────────────────────────
-  for (const trade of activeTrades) {
-    try {
-      const currentPrice = await fetchCurrentPrice(trade.asset as Asset);
-      trade.currentPrice = currentPrice;
-      tradesChanged = true;
+    const trades = loadPaperTrades();
+    const pendingTrades = trades.filter((t) => t.status === 'pending');
+    const activeTrades  = trades.filter((t) => t.status === 'active');
 
-      const isLong       = trade.direction === 'LONG';
-      const nowMs        = Date.now();
-      const openMs       = new Date(trade.openTime).getTime();
-      const holdMinutes  = Math.round((nowMs - openMs) / 60000);
-      const maxHoldMin   = trade.tradeType === 'SWING' ? PAPER_SWING_MAX_HOLD : PAPER_SCALP_MAX_HOLD;
+    if (pendingTrades.length === 0 && activeTrades.length === 0) return;
 
-      const hitSL  = isLong ? currentPrice <= trade.stopLoss  : currentPrice >= trade.stopLoss;
-      const hitTP  = isLong ? currentPrice >= trade.takeProfit : currentPrice <= trade.takeProfit;
-      const timed  = holdMinutes >= maxHoldMin;
+    const state: PaperState = loadPaperState();
+    let stateChanged  = false;
+    let tradesChanged = false;
 
-      if (hitSL || hitTP || timed) {
-        // ── Determine exit price ────────────────────────────────────────
-        // SL/TP hits: use the exact SL/TP level (realistic order fill).
-        // Max hold time or other closes: use poll-time price.
-        let exitPrice: number;
-        let closeReason: PaperCloseReason;
+    // ── Process pending orders ──────────────────────────────────────────────────
+    for (const trade of pendingTrades) {
+      try {
+        const currentPrice = await fetchCurrentPrice(trade.asset as Asset);
+        trade.currentPrice = currentPrice;
+        tradesChanged = true;
 
-        if (hitTP) {
-          exitPrice   = trade.takeProfit;
-          closeReason = 'TP hit';
-        } else if (hitSL) {
-          exitPrice   = trade.stopLoss;
-          closeReason = 'SL hit';
-        } else {
-          exitPrice   = currentPrice;
-          closeReason = 'max hold time';
+        const isLong = trade.direction === 'LONG';
+        const limitPrice = trade.pendingEntryPrice!;
+
+        // Check expiry first
+        if (trade.pendingExpiresAt && Date.now() > new Date(trade.pendingExpiresAt).getTime()) {
+          trade.status      = 'closed';
+          trade.closeTime   = new Date().toISOString();
+          trade.closeReason = 'pending expired';
+          trade.exitPrice   = currentPrice;
+          trade.pnlDollar   = 0;
+          trade.pnlR        = 0;
+          trade.pnlPct      = 0;
+          trade.holdMinutes = 0;
+          trade.balanceAfter = state.virtualBalance;
+
+          await channel.send(buildPaperExpiredEmbed(trade));
+          logger.info(`paperTrading: pending expired for ${trade.asset} @ limit=${limitPrice} (id=${trade.id.slice(0, 8)})`);
+          continue;
         }
 
-        // ── P&L calculation ─────────────────────────────────────────────
-        // pnlR = how many R-multiples we made/lost.
-        // pnlDollar = pnlR × riskDollars ensures that -1R = losing the
-        // full risk amount (positionSizeDollars = 5% of balance at entry).
-        const pnlPct = isLong
-          ? (exitPrice - trade.entryPrice) / trade.entryPrice
-          : (trade.entryPrice - exitPrice) / trade.entryPrice;
-        const stopDistPct = Math.abs(trade.entryPrice - trade.stopLoss) / trade.entryPrice;
-        const pnlR      = stopDistPct > 0 ? pnlPct / stopDistPct : 0;
-        const pnlDollar = pnlR * trade.positionSizeDollars;
+        // Check if price has reached the limit
+        const triggered = isLong
+          ? currentPrice <= limitPrice
+          : currentPrice >= limitPrice;
 
-        // Fee calculation (Binance Futures: 0.02% taker fee per side)
-        const notional = stopDistPct > 0 ? trade.positionSizeDollars / stopDistPct : trade.positionSizeDollars;
-        const fee = notional * TAKER_FEE * 2; // entry + exit
-        const netPnl = pnlDollar - fee;
+        if (triggered) {
+          // Fill the order — apply slippage on fill
+          const slip       = await getSlipPct(trade.asset);
+          const fillPrice  = isLong
+            ? limitPrice * (1 + slip)
+            : limitPrice * (1 - slip);
+          const slippageDollar = Math.abs(fillPrice - limitPrice);
 
-        const closeTime = new Date().toISOString();
+          trade.status     = 'active';
+          trade.entryPrice = fillPrice;
+          // openTime stays the same — when the pending order was placed
 
-        trade.status      = 'closed';
-        trade.closeTime   = closeTime;
-        trade.exitPrice   = exitPrice;
-        trade.pnlDollar   = netPnl;
-        trade.pnlR        = pnlR;
-        trade.pnlPct      = pnlPct;
-        trade.holdMinutes = holdMinutes;
-        trade.closeReason = closeReason;
-        trade.balanceAfter = state.virtualBalance + netPnl;
-
-        state.virtualBalance += netPnl;
-        stateChanged = true;
-
-        // ── Consecutive loss tracking ────────────────────────────────────
-        if (pnlDollar > 0) {
-          state.consecutiveLosses = 0;
-        } else {
-          state.consecutiveLosses = (state.consecutiveLosses ?? 0) + 1;
-        }
-
-        // ── Circuit breaker trigger ──────────────────────────────────────
-        const cbLosses = state.consecutiveLosses ?? 0;
-        if (cbLosses >= PAPER_CB_LOSS_COUNT && !state.circuitBreakerUntil) {
-          state.circuitBreakerUntil = new Date(
-            Date.now() + PAPER_CB_COOLDOWN_MIN * 60 * 1000
-          ).toISOString();
-          await channel.send(buildCircuitBreakerEmbed(cbLosses));
-          logger.warn(
-            `paperTrading: circuit breaker triggered after ${cbLosses} consecutive losses` +
-            ` — pausing entries until ${state.circuitBreakerUntil}`
+          await channel.send(buildPaperFilledEmbed(trade, slippageDollar, slip, state.virtualBalance));
+          logger.info(
+            `paperTrading: pending filled ${trade.direction} ${trade.asset} @ ${fillPrice.toFixed(4)} ` +
+            `(limit=${limitPrice}, slip=${(slip * 100).toFixed(2)}%, id=${trade.id.slice(0, 8)})`
           );
         }
-
-        await channel.send(buildPaperCloseEmbed(trade));
-        logger.info(
-          `paperTrading: closed ${trade.direction} ${trade.asset} — ` +
-          `${closeReason} P&L=$${pnlDollar.toFixed(2)} (${pnlR.toFixed(2)}R) ` +
-          `balance=$${state.virtualBalance.toFixed(2)}`
-        );
+      } catch (err) {
+        logger.warn(`paperTrading: error processing pending trade ${trade.id.slice(0, 8)}:`, err);
       }
-    } catch (err) {
-      logger.warn(`paperTrading: error checking position ${trade.id.slice(0, 8)}:`, err);
     }
-  }
 
-  if (tradesChanged) savePaperTrades(trades);
-  if (stateChanged)  savePaperState(state);
+    // ── Process active positions ────────────────────────────────────────────────
+    for (const trade of activeTrades) {
+      try {
+        const currentPrice = await fetchCurrentPrice(trade.asset as Asset);
+        trade.currentPrice = currentPrice;
+        tradesChanged = true;
 
-  // ── Account blow check ──────────────────────────────────────────────────────
-  // Re-load state after saves to get updated balance
-  const freshState = loadPaperState();
-  if (freshState.virtualBalance < PAPER_BLOWN_THRESHOLD && !freshState.blownAt) {
-    await triggerAccountBlow(freshState, channel);
-  }
+        const isLong       = trade.direction === 'LONG';
+        const nowMs        = Date.now();
+        const openMs       = new Date(trade.openTime).getTime();
+        const holdMinutes  = Math.round((nowMs - openMs) / 60000);
+        const maxHoldMin   = trade.tradeType === 'SWING' ? PAPER_SWING_MAX_HOLD : PAPER_SCALP_MAX_HOLD;
+
+        const hitSL  = isLong ? currentPrice <= trade.stopLoss  : currentPrice >= trade.stopLoss;
+        const hitTP  = isLong ? currentPrice >= trade.takeProfit : currentPrice <= trade.takeProfit;
+        const timed  = holdMinutes >= maxHoldMin;
+
+        if (hitSL || hitTP || timed) {
+          // ── Determine exit price ────────────────────────────────────────
+          // SL/TP hits: use the exact SL/TP level (realistic order fill).
+          // Max hold time or other closes: use poll-time price.
+          let exitPrice: number;
+          let closeReason: PaperCloseReason;
+
+          if (hitTP) {
+            exitPrice   = trade.takeProfit;
+            closeReason = 'TP hit';
+          } else if (hitSL) {
+            exitPrice   = trade.stopLoss;
+            closeReason = 'SL hit';
+          } else {
+            exitPrice   = currentPrice;
+            closeReason = 'max hold time';
+          }
+
+          // ── P&L calculation ─────────────────────────────────────────────
+          // pnlR = how many R-multiples we made/lost.
+          // pnlDollar = pnlR × riskDollars ensures that -1R = losing the
+          // full risk amount (positionSizeDollars = 5% of balance at entry).
+          const pnlPct = isLong
+            ? (exitPrice - trade.entryPrice) / trade.entryPrice
+            : (trade.entryPrice - exitPrice) / trade.entryPrice;
+          const stopDistPct = Math.abs(trade.entryPrice - trade.stopLoss) / trade.entryPrice;
+          const pnlR      = stopDistPct > 0 ? pnlPct / stopDistPct : 0;
+          const pnlDollar = pnlR * trade.positionSizeDollars;
+
+          // Fee calculation (Binance Futures: 0.02% taker fee per side)
+          const notional = stopDistPct > 0 ? trade.positionSizeDollars / stopDistPct : trade.positionSizeDollars;
+          const fee = notional * TAKER_FEE * 2; // entry + exit
+          const netPnl = pnlDollar - fee;
+
+          const closeTime = new Date().toISOString();
+
+          trade.status      = 'closed';
+          trade.closeTime   = closeTime;
+          trade.exitPrice   = exitPrice;
+          trade.pnlDollar   = netPnl;
+          trade.pnlR        = pnlR;
+          trade.pnlPct      = pnlPct;
+          trade.holdMinutes = holdMinutes;
+          trade.closeReason = closeReason;
+          trade.balanceAfter = state.virtualBalance + netPnl;
+
+          state.virtualBalance += netPnl;
+          stateChanged = true;
+
+          // ── Consecutive loss tracking ────────────────────────────────────
+          if (netPnl > 0) {
+            state.consecutiveLosses = 0;
+          } else {
+            state.consecutiveLosses = (state.consecutiveLosses ?? 0) + 1;
+          }
+
+          // ── Circuit breaker trigger ──────────────────────────────────────
+          const cbLosses = state.consecutiveLosses ?? 0;
+          if (cbLosses >= PAPER_CB_LOSS_COUNT && !state.circuitBreakerUntil) {
+            state.circuitBreakerUntil = new Date(
+              Date.now() + PAPER_CB_COOLDOWN_MIN * 60 * 1000
+            ).toISOString();
+            await channel.send(buildCircuitBreakerEmbed(cbLosses));
+            logger.warn(
+              `paperTrading: circuit breaker triggered after ${cbLosses} consecutive losses` +
+              ` — pausing entries until ${state.circuitBreakerUntil}`
+            );
+          }
+
+          await channel.send(buildPaperCloseEmbed(trade));
+          logger.info(
+            `paperTrading: closed ${trade.direction} ${trade.asset} — ` +
+            `${closeReason} P&L=$${pnlDollar.toFixed(2)} (${pnlR.toFixed(2)}R) ` +
+            `balance=$${state.virtualBalance.toFixed(2)}`
+          );
+        }
+      } catch (err) {
+        logger.warn(`paperTrading: error checking position ${trade.id.slice(0, 8)}:`, err);
+      }
+    }
+
+    if (tradesChanged) savePaperTrades(trades);
+    if (stateChanged)  savePaperState(state);
+
+    // ── Account blow check ──────────────────────────────────────────────────────
+    // Re-load state after saves to get updated balance
+    const freshState = loadPaperState();
+    if (freshState.virtualBalance < PAPER_BLOWN_THRESHOLD && !freshState.blownAt) {
+      await triggerAccountBlow(freshState, channel);
+    }
+  });
 }
 
 /**
@@ -794,52 +811,59 @@ export async function closePaperPosition(
   channel: TextChannel,
   reason: 'EMA breakdown' | 'manual' = 'manual',
 ): Promise<void> {
-  const trades = loadPaperTrades();
-  const trade  = trades.find((t) => t.id === tradeId && t.status === 'active');
-  if (!trade) return;
+  await withStateLock(async () => {
+    const trades = loadPaperTrades();
+    const trade  = trades.find((t) => t.id === tradeId && t.status === 'active');
+    if (!trade) return;
 
-  const state = loadPaperState();
-  try {
-    const currentPrice = await fetchCurrentPrice(trade.asset as Asset);
-    const isLong = trade.direction === 'LONG';
+    const state = loadPaperState();
+    try {
+      const currentPrice = await fetchCurrentPrice(trade.asset as Asset);
+      const isLong = trade.direction === 'LONG';
 
-    const pnlPct = isLong
-      ? (currentPrice - trade.entryPrice) / trade.entryPrice
-      : (trade.entryPrice - currentPrice) / trade.entryPrice;
-    const stopDistPct = Math.abs(trade.entryPrice - trade.stopLoss) / trade.entryPrice;
-    const pnlR      = stopDistPct > 0 ? pnlPct / stopDistPct : 0;
-    const pnlDollar = pnlR * trade.positionSizeDollars;
+      const pnlPct = isLong
+        ? (currentPrice - trade.entryPrice) / trade.entryPrice
+        : (trade.entryPrice - currentPrice) / trade.entryPrice;
+      const stopDistPct = Math.abs(trade.entryPrice - trade.stopLoss) / trade.entryPrice;
+      const pnlR      = stopDistPct > 0 ? pnlPct / stopDistPct : 0;
+      const pnlDollar = pnlR * trade.positionSizeDollars;
 
-    const holdMinutes = Math.round(
-      (Date.now() - new Date(trade.openTime).getTime()) / 60000
-    );
+      const holdMinutes = Math.round(
+        (Date.now() - new Date(trade.openTime).getTime()) / 60000
+      );
 
-    trade.status      = 'closed';
-    trade.closeTime   = new Date().toISOString();
-    trade.exitPrice   = currentPrice;
-    trade.pnlDollar   = pnlDollar;
-    trade.pnlR        = pnlR;
-    trade.pnlPct      = pnlPct;
-    trade.holdMinutes = holdMinutes;
-    trade.closeReason = reason;
-    trade.balanceAfter = state.virtualBalance + pnlDollar;
+      // Fee calculation (Binance Futures: 0.02% taker fee per side)
+      const notional = stopDistPct > 0 ? trade.positionSizeDollars / stopDistPct : trade.positionSizeDollars;
+      const fee = notional * TAKER_FEE * 2; // entry + exit
+      const netPnl = pnlDollar - fee;
 
-    state.virtualBalance += pnlDollar;
+      trade.status      = 'closed';
+      trade.closeTime   = new Date().toISOString();
+      trade.exitPrice   = currentPrice;
+      trade.pnlDollar   = netPnl;
+      trade.pnlR        = pnlR;
+      trade.pnlPct      = pnlPct;
+      trade.holdMinutes = holdMinutes;
+      trade.closeReason = reason;
+      trade.balanceAfter = state.virtualBalance + netPnl;
 
-    // Update consecutive losses
-    if (pnlDollar > 0) {
-      state.consecutiveLosses = 0;
-    } else {
-      state.consecutiveLosses = (state.consecutiveLosses ?? 0) + 1;
+      state.virtualBalance += netPnl;
+
+      // Update consecutive losses
+      if (netPnl > 0) {
+        state.consecutiveLosses = 0;
+      } else {
+        state.consecutiveLosses = (state.consecutiveLosses ?? 0) + 1;
+      }
+
+      savePaperTrades(trades);
+      savePaperState(state);
+
+      await channel.send(buildPaperCloseEmbed(trade));
+    } catch (err) {
+      logger.error('paperTrading: closePaperPosition error:', err);
     }
-
-    savePaperTrades(trades);
-    savePaperState(state);
-
-    await channel.send(buildPaperCloseEmbed(trade));
-  } catch (err) {
-    logger.error('paperTrading: closePaperPosition error:', err);
-  }
+  });
 }
 
 // ─── Stats & query functions ───────────────────────────────────────────────────
@@ -938,19 +962,21 @@ export function getOpenPaperPositions(): PaperTrade[] {
  * Closes all open positions immediately (no P&L recorded), wipes trade history,
  * and restores the virtual balance to the configured starting balance.
  */
-export function resetPaperTrading(): number {
-  ensureDataDir();
-  const startingBalance = config.paper.startingBalance;
-  savePaperTrades([]);
-  const freshState: PaperState = {
-    virtualBalance:   startingBalance,
-    startingBalance,
-    lastUpdated:      new Date().toISOString(),
-    consecutiveLosses: 0,
-  };
-  savePaperState(freshState);
-  logger.info(`[paperTrading] Account reset — balance restored to $${startingBalance.toFixed(2)}, all trade history wiped`);
-  return startingBalance;
+export async function resetPaperTrading(): Promise<number> {
+  return withStateLock(async () => {
+    ensureDataDir();
+    const startingBalance = config.paper.startingBalance;
+    savePaperTrades([]);
+    const freshState: PaperState = {
+      virtualBalance:   startingBalance,
+      startingBalance,
+      lastUpdated:      new Date().toISOString(),
+      consecutiveLosses: 0,
+    };
+    savePaperState(freshState);
+    logger.info(`[paperTrading] Account reset — balance restored to $${startingBalance.toFixed(2)}, all trade history wiped`);
+    return startingBalance;
+  });
 }
 
 export function getPaperHistory(count: number): PaperTrade[] {
