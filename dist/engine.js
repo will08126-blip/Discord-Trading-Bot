@@ -156,22 +156,14 @@ async function monitorActivePositions() {
                 }
                 continue;
             }
-            // ── TP level extended ────────────────────────────────────────────────
+            // ── TP self-corrected (old runaway extension fixed) ───────────────────
             if (update.oldTP !== update.newTP) {
                 await tc.send((0, embeds_1.buildTPUpdateEmbed)(position, update.oldTP, update.newTP, currentPrice));
             }
-            // ── TP proximity: try to extend before alerting ──────────────────────
+            // ── TP approaching — alert user to consider taking profit ─────────────
             const tpDist = Math.abs(currentPrice - update.newTP) / currentPrice;
             if (tpDist < 0.003) {
-                const extension = (0, signalManager_1.attemptMomentumTPExtension)(position, candles5m, currentPrice);
-                if (extension) {
-                    // Momentum is strong — push TP out and let it run
-                    await tc.send((0, embeds_1.buildTPUpdateEmbed)(position, extension.oldTP, extension.newTP, currentPrice));
-                }
-                else {
-                    // Momentum is fading or cap reached — alert to consider taking profit
-                    await tc.send((0, embeds_1.buildExitAlertEmbed)(position, 'TP_APPROACH', currentPrice));
-                }
+                await tc.send((0, embeds_1.buildExitAlertEmbed)(position, 'TP_APPROACH', currentPrice));
             }
         }
         catch (err) {

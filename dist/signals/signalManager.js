@@ -171,28 +171,31 @@ function updateDynamicSLTP(position, candles5m, currentPrice) {
     if (!currentAtr || isNaN(currentAtr))
         return null;
     const oldTP = position.currentTakeProfit;
-    // Track price extremes (used for TP extension)
+    // Track price extremes
     if (isLong && currentPrice > position.highestPrice)
         position.highestPrice = currentPrice;
     if (!isLong && currentPrice < position.lowestPrice)
         position.lowestPrice = currentPrice;
-    // ── TP extension ──────────────────────────────────────────────────────
-    // If price has moved > 1.5× the original reference distance in our favour, extend TP
-    const originalStopDist = Math.abs(position.entryPrice - position.signal.stopLoss);
-    const priceMoved = isLong
-        ? currentPrice - position.entryPrice
-        : position.entryPrice - currentPrice;
-    let newTP = oldTP;
-    if (originalStopDist > 0 && priceMoved > originalStopDist * 1.5) {
-        const extension = originalStopDist * 0.5;
-        const extended = isLong ? oldTP + extension : oldTP - extension;
-        if (isLong && extended > newTP)
-            newTP = extended;
-        if (!isLong && extended < newTP)
-            newTP = extended;
+    // TP is fixed at the target set on entry (targetReturnPct / leverage price move).
+    // No continuous extension — that caused runaway TPs after many scan cycles.
+    // Self-correct any TP that was inflated by the old extension logic:
+    // if stored TP is more than 2× the intended capital-return move from entry, reset it.
+    const targetReturn = config_1.config.trading.targetReturnPct;
+    if (targetReturn > 0 && position.suggestedLeverage > 0) {
+        const correctMove = targetReturn / position.suggestedLeverage;
+        const correctTP = isLong
+            ? position.entryPrice * (1 + correctMove)
+            : position.entryPrice * (1 - correctMove);
+        const inflated = isLong
+            ? position.currentTakeProfit > position.entryPrice * (1 + correctMove * 2)
+            : position.currentTakeProfit < position.entryPrice * (1 - correctMove * 2);
+        if (inflated) {
+            position.currentTakeProfit = correctTP;
+            logger_1.logger.info(`TP self-corrected for ${position.id.slice(0, 8)}: reset to ${correctTP.toFixed(4)}`);
+        }
     }
-    // Commit changes
-    position.currentTakeProfit = newTP;
+    const newTP = position.currentTakeProfit;
+    // Commit timestamp
     position.lastSLTPUpdateAt = Date.now();
     // ── Check for TP breach ───────────────────────────────────────────────
     const hitTP = isLong ? currentPrice >= newTP : currentPrice <= newTP;
