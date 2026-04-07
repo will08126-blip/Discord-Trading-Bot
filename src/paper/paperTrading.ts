@@ -343,12 +343,15 @@ async function performAccountReset(state: PaperState, channel: TextChannel): Pro
   // Clear all open/pending positions (no P&L — account is blown)
   savePaperTrades([]);
 
-  // Fresh state
+  // Fresh state — explicitly clear blown/circuit-breaker flags so no stale
+  // state can block new entries after the reset
   const freshState: PaperState = {
-    virtualBalance: startingBalance,
+    virtualBalance:      startingBalance,
     startingBalance,
-    lastUpdated: new Date().toISOString(),
-    consecutiveLosses: 0,
+    lastUpdated:         new Date().toISOString(),
+    consecutiveLosses:   0,
+    blownAt:             undefined,
+    circuitBreakerUntil: undefined,
   };
   savePaperState(freshState);
 
@@ -967,11 +970,15 @@ export async function resetPaperTrading(): Promise<number> {
     ensureDataDir();
     const startingBalance = config.paper.startingBalance;
     savePaperTrades([]);
+    // Explicitly clear blown/circuit-breaker flags so the account is
+    // fully unblocked regardless of what state it was in before the reset
     const freshState: PaperState = {
-      virtualBalance:   startingBalance,
+      virtualBalance:      startingBalance,
       startingBalance,
-      lastUpdated:      new Date().toISOString(),
-      consecutiveLosses: 0,
+      lastUpdated:         new Date().toISOString(),
+      consecutiveLosses:   0,
+      blownAt:             undefined,
+      circuitBreakerUntil: undefined,
     };
     savePaperState(freshState);
     logger.info(`[paperTrading] Account reset — balance restored to $${startingBalance.toFixed(2)}, all trade history wiped`);

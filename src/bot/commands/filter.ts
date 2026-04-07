@@ -13,27 +13,75 @@ export const data = new SlashCommandBuilder()
   .addStringOption((opt) =>
     opt
       .setName('mode')
-      .setDescription('Signal sensitivity preset')
-      .setRequired(true)
+      .setDescription('Signal sensitivity preset (optional if score is provided)')
+      .setRequired(false)
       .addChoices(
         { name: '🔒 Strict  — ELITE only (score ≥ 75),  fewest signals',  value: 'strict'  },
         { name: '⚖️ Normal  — STRONG + ELITE (score ≥ 60), default',       value: 'normal'  },
         { name: '🔓 Relaxed — all setups (score ≥ 45),   most signals',    value: 'relaxed' },
       )
+  )
+  .addIntegerOption((opt) =>
+    opt
+      .setName('score')
+      .setDescription('Exact minimum score threshold (1–100) — overrides mode when provided')
+      .setRequired(false)
+      .setMinValue(1)
+      .setMaxValue(100)
   );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-  const mode = interaction.options.getString('mode', true) as keyof typeof PRESETS;
-  const preset = PRESETS[mode];
+  const mode        = interaction.options.getString('mode') as keyof typeof PRESETS | null;
+  const customScore = interaction.options.getInteger('score');
 
-  setMinScoreThreshold(preset.threshold);
+  if (mode === null && customScore === null) {
+    await interaction.reply({
+      content: '❌ Please provide a **mode** preset, a **score** value, or both.',
+      ephemeral: true,
+    });
+    return;
+  }
 
+  let threshold: number;
+  let embedColor: number;
+  let title: string;
+  let description: string;
+  let tierValue: string;
+  let whatChanges: string;
+
+  if (customScore !== null) {
+    threshold   = customScore;
+    embedColor  = 0x5865f2;
+    title       = `🎯 Signal Filter — Custom (score ≥ ${customScore})`;
+    description = mode
+      ? `Custom threshold based on the **${PRESETS[mode].label}** preset. Exact value set by you.`
+      : 'Custom threshold set directly. Signals scoring below this value will not be posted.';
+    tierValue   = threshold >= 80 ? 'ELITE only'
+                : threshold >= 60 ? 'STRONG + ELITE'
+                : threshold >= 45 ? 'MEDIUM + STRONG + ELITE'
+                : 'All signals';
+    whatChanges = `Only signals scoring **${threshold}** or higher will be posted.`;
+  } else {
+    const preset = PRESETS[mode!];
+    threshold    = preset.threshold;
+    embedColor   = mode === 'strict' ? 0xff6600 : mode === 'relaxed' ? 0x00cc44 : 0x5865f2;
+    title        = `${preset.emoji} Signal Filter — ${preset.label}`;
+    description  = preset.desc;
+    tierValue    = preset.tier;
+    whatChanges  = mode === 'strict'
+      ? 'Only 🏆 ELITE signals (score 80–100) will be posted. Rare but very high quality.'
+      : mode === 'relaxed'
+      ? '⚡ MEDIUM signals (score 45–59) are now included alongside STRONG and ELITE. Expect more pings.'
+      : '💪 Back to the default. STRONG (60–79) and ELITE (80–100) signals are posted.';
+  }
+
+  setMinScoreThreshold(threshold);
   const currentThreshold = getMinScoreThreshold();
 
   const embed = new EmbedBuilder()
-    .setColor(mode === 'strict' ? 0xff6600 : mode === 'relaxed' ? 0x00cc44 : 0x5865f2)
-    .setTitle(`${preset.emoji} Signal Filter — ${preset.label}`)
-    .setDescription(preset.desc)
+    .setColor(embedColor)
+    .setTitle(title)
+    .setDescription(description)
     .addFields(
       {
         name: 'Threshold',
@@ -42,17 +90,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       },
       {
         name: 'Tiers Posted',
-        value: `**${preset.tier}**`,
+        value: `**${tierValue}**`,
         inline: true,
       },
       {
         name: 'What changes',
-        value:
-          mode === 'strict'
-            ? 'Only 🏆 ELITE signals (score 80–100) will be posted. Rare but very high quality.'
-            : mode === 'relaxed'
-            ? '⚡ MEDIUM signals (score 45–59) are now included alongside STRONG and ELITE. Expect more pings.'
-            : '💪 Back to the default. STRONG (60–79) and ELITE (80–100) signals are posted.',
+        value: whatChanges,
         inline: false,
       }
     )
