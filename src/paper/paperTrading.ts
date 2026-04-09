@@ -35,6 +35,14 @@ function withStateLock<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
+// Set synchronously BEFORE acquiring the lock so that any concurrent
+// checkPaperPositions / enterPaperTrade that is mid-execution (awaiting
+// a price fetch) will see this flag when it returns and skip its stale writes.
+let resetInProgress = false;
+// Rate-limit Discord notifications for blocked entry attempts (module-level)
+let lastBlownNotifTime  = 0;
+let lastCBNotifTime     = 0;
+
 // ─── Slippage model ───────────────────────────────────────────────────────────
 // Low-liquidity / meme coins face wider spreads than major pairs.
 
@@ -492,6 +500,21 @@ export async function enterPaperTrade(
       } else {
         const minsLeft = Math.ceil((PAPER_RESET_DELAY_MIN * 60 * 1000 - msElapsed) / 60000);
         logger.debug(`paperTrading: blown cooldown — ${minsLeft}min remaining, skip ${signal.asset}`);
+        // Notify the channel at most once every 10 minutes to avoid spam
+        if (Date.now() - lastBlownNotifTime > 10 * 60 * 1000) {
+          lastBlownNotifTime = Date.now();
+          await channel.send({
+            embeds: [new EmbedBuilder()
+              .setColor(0xffaa00)
+              .setTitle('⏸ Paper Trading Paused — Account Blown')
+              .setDescription(
+                `Virtual balance fell below $${PAPER_BLOWN_THRESHOLD}. Auto-restarting in **${minsLeft} minute(s)**.\n` +
+                `Use \`/paper-reset\` to restart immediately.`
+              )
+              .setTimestamp()
+              .setFooter({ text: 'Paper trading only — no real money affected' })],
+          });
+        }
         return;
       }
     }
@@ -500,7 +523,23 @@ export async function enterPaperTrade(
     if (state.circuitBreakerUntil) {
       const cbUntil = new Date(state.circuitBreakerUntil).getTime();
       if (Date.now() < cbUntil) {
+        const minsLeft = Math.ceil((cbUntil - Date.now()) / 60000);
         logger.info(`paperTrading: circuit breaker active until ${state.circuitBreakerUntil} — skip ${signal.asset}`);
+        // Notify the channel at most once every 10 minutes to avoid spam
+        if (Date.now() - lastCBNotifTime > 10 * 60 * 1000) {
+          lastCBNotifTime = Date.now();
+          await channel.send({
+            embeds: [new EmbedBuilder()
+              .setColor(0xff6600)
+              .setTitle('⚠️ Paper Trading Paused — Circuit Breaker Active')
+              .setDescription(
+                `Trading paused after ${state.consecutiveLosses} consecutive losses. Resuming in **${minsLeft} minute(s)**.\n` +
+                `Use \`/paper-reset\` to clear immediately.`
+              )
+              .setTimestamp()
+              .setFooter({ text: 'Paper trading only — no real money affected' })],
+          });
+        }
         return;
       }
       // Expired — clear it
@@ -558,6 +597,10 @@ export async function enterPaperTrade(
         meta,
       };
 
+      if (resetInProgress) {
+        logger.warn('[enterPaperTrade] Reset in progress — discarding stale pending entry');
+        return;
+      }
       trades.push(trade);
       savePaperTrades(trades);
 
@@ -592,6 +635,10 @@ export async function enterPaperTrade(
         meta,
       };
 
+      if (resetInProgress) {
+        logger.warn('[enterPaperTrade] Reset in progress — discarding stale active entry');
+        return;
+      }
       trades.push(trade);
       savePaperTrades(trades);
 
@@ -793,6 +840,11 @@ export async function checkPaperPositions(channel: TextChannel): Promise<void> {
       }
     }
 
+    // Skip stale writes if a reset was triggered while we were awaiting price fetches
+    if (resetInProgress) {
+      logger.warn('[checkPaperPositions] Reset in progress — discarding stale writes');
+      return;
+    }
     if (tradesChanged) savePaperTrades(trades);
     if (stateChanged)  savePaperState(state);
 
@@ -966,24 +1018,37 @@ export function getOpenPaperPositions(): PaperTrade[] {
  * and restores the virtual balance to the configured starting balance.
  */
 export async function resetPaperTrading(): Promise<number> {
-  return withStateLock(async () => {
-    ensureDataDir();
-    const startingBalance = config.paper.startingBalance;
-    savePaperTrades([]);
-    // Explicitly clear blown/circuit-breaker flags so the account is
-    // fully unblocked regardless of what state it was in before the reset
-    const freshState: PaperState = {
-      virtualBalance:      startingBalance,
-      startingBalance,
-      lastUpdated:         new Date().toISOString(),
-      consecutiveLosses:   0,
-      blownAt:             undefined,
-      circuitBreakerUntil: undefined,
-    };
-    savePaperState(freshState);
-    logger.info(`[paperTrading] Account reset — balance restored to $${startingBalance.toFixed(2)}, all trade history wiped`);
-    return startingBalance;
-  });
+  // Set synchronously before acquiring the lock.  Any concurrent
+  // checkPaperPositions or enterPaperTrade that is mid-execution (currently
+  // awaiting a price fetch inside the lock) will see this flag when it resumes
+  // and will skip its stale in-memory writes, preventing it from overwriting
+  // the fresh state we are about to save.
+  resetInProgress = true;
+  try {
+    return await withStateLock(async () => {
+      ensureDataDir();
+      const startingBalance = config.paper.startingBalance;
+      savePaperTrades([]);
+      // Explicitly clear blown/circuit-breaker flags so the account is
+      // fully unblocked regardless of what state it was in before the reset
+      const freshState: PaperState = {
+        virtualBalance:      startingBalance,
+        startingBalance,
+        lastUpdated:         new Date().toISOString(),
+        consecutiveLosses:   0,
+        blownAt:             undefined,
+        circuitBreakerUntil: undefined,
+      };
+      savePaperState(freshState);
+      logger.info(`[paperTrading] Account reset — balance restored to $${startingBalance.toFixed(2)}, all trade history wiped`);
+      return startingBalance;
+    });
+  } finally {
+    resetInProgress = false; // always clear, even on error
+    // Also reset notification timers so the next block (if any) notifies promptly
+    lastBlownNotifTime = 0;
+    lastCBNotifTime    = 0;
+  }
 }
 
 export function getPaperHistory(count: number): PaperTrade[] {

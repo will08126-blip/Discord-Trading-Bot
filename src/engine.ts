@@ -540,9 +540,11 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
       assetResults.push({ asset, regime: regime.regime, topScore: assetTopScore, topStrategy: assetTopStrategy });
     }
 
-    // Filter, rank, de-duplicate across strategies
-    // Uses the runtime threshold (set via /filter) or falls back to config default.
-    const ranked = filterAndRankSignals(newSignals, getMinScoreThreshold());
+    // Signals in newSignals already passed their per-type threshold filter above
+    // (scalpParams.minScoreScalp for SCALP, getMinScoreThreshold() for SWING/HYBRID).
+    // Pass 0 here so we only sort/dedup — not re-filter with a possibly different
+    // global threshold that would silently drop valid SCALP signals.
+    const ranked = filterAndRankSignals(newSignals, 0);
     const deduped = deduplicateSignals(ranked);
 
     logger.info(`Scan complete: ${newSignals.length} raw → ${ranked.length} ranked → ${deduped.length} posted`);
