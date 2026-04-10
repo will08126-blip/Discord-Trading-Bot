@@ -55,12 +55,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     title       = `🎯 Signal Filter — Custom (score ≥ ${customScore})`;
     description = mode
       ? `Custom threshold based on the **${PRESETS[mode].label}** preset. Exact value set by you.`
-      : 'Custom threshold set directly. Signals scoring below this value will not be posted.';
+      : 'Custom threshold set directly. Signals scoring below this value will not appear in #bot-signals or #paper-trading.';
     tierValue   = threshold >= 80 ? 'ELITE only'
                 : threshold >= 60 ? 'STRONG + ELITE'
                 : threshold >= 45 ? 'MEDIUM + STRONG + ELITE'
                 : 'All signals';
-    whatChanges = `Only signals scoring **${threshold}** or higher will be posted.`;
+    whatChanges = `Only signals scoring **${threshold}** or higher will appear in #bot-signals or #paper-trading.`;
   } else {
     const preset = PRESETS[mode!];
     threshold    = preset.threshold;
@@ -69,10 +69,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     description  = preset.desc;
     tierValue    = preset.tier;
     whatChanges  = mode === 'strict'
-      ? 'Only 🏆 ELITE signals (score 80–100) will be posted. Rare but very high quality.'
+      ? 'Only 🏆 ELITE signals (score 80–100) will appear in #bot-signals or #paper-trading. Rare but very high quality.'
       : mode === 'relaxed'
-      ? '⚡ MEDIUM signals (score 45–59) are now included alongside STRONG and ELITE. Expect more pings.'
-      : '💪 Back to the default. STRONG (60–79) and ELITE (80–100) signals are posted.';
+      ? '⚡ MEDIUM signals (score 45–59) are now included alongside STRONG and ELITE in both channels. Expect more activity.'
+      : '💪 Back to the default. STRONG (60–79) and ELITE (80–100) signals appear in both channels.';
   }
 
   setMinScoreThreshold(threshold);
