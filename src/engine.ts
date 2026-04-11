@@ -508,11 +508,19 @@ export async function runScanCycle(): Promise<{ signalCount: number; skipped: bo
             ? ` [w=${combinedWeight.toFixed(2)}, score ${preWeightScore}→${signal.score}]`
             : '';
 
-          // Score threshold: scalp signals use the adaptive threshold; swing uses config
+          // Score threshold:
+          // • SWING   → manual filter floor (set by /filter command)
+          // • SCALP/HYBRID → adaptive scalp-params threshold, but the manual
+          //   filter acts as a global floor so /filter strict also gates
+          //   paper-only scalp signals that appear in #paper-trading.
           const isScalpSignal = signal.tradeType === 'SCALP' || signal.tradeType === 'HYBRID';
+          const manualFloor = getMinScoreThreshold();
           const minScore = isScalpSignal
-            ? (signal.tradeType === 'SCALP' ? scalpParams.minScoreScalp : scalpParams.minScoreHybrid)
-            : getMinScoreThreshold();
+            ? Math.max(
+                signal.tradeType === 'SCALP' ? scalpParams.minScoreScalp : scalpParams.minScoreHybrid,
+                manualFloor
+              )
+            : manualFloor;
 
           if (signal.score < minScore || signal.tier === 'NO_TRADE') {
             logger.info(`  ${strategy.name}: score=${signal.score} < ${minScore}${weightNote} — filtered`);
