@@ -78,16 +78,26 @@ function toOHLCV(raw: any[][]): OHLCV[] {
   }));
 }
 
-function checkStaleness(candles: OHLCV[], timeframe: Timeframe): void {
-  if (candles.length === 0) return; // empty = market closed, already logged upstream
+function checkStaleness(candles: OHLCV[], timeframe: Timeframe): OHLCV[] {
+  if (candles.length === 0) return candles; // empty = market closed, already logged upstream
   const staleThreshold = config.engine.staleThresholds[timeframe];
   const lastCandle = candles[candles.length - 1];
   const age = Date.now() - lastCandle.time;
+  if (age > staleThreshold * 2) {
+    // Critically stale: data is more than 2× the expected interval old.
+    // Returning an empty array causes strategies to abort early on their
+    // minimum-candle guard rather than trading on wildly outdated prices.
+    logger.error(
+      `Critically stale data for ${timeframe}: last candle is ${Math.round(age / 1000)}s old — skipping`
+    );
+    return [];
+  }
   if (age > staleThreshold) {
     logger.warn(
       `Stale data for ${timeframe}: last candle is ${Math.round(age / 1000)}s old — using anyway`
     );
   }
+  return candles;
 }
 
 export async function fetchOHLCV(
@@ -111,7 +121,7 @@ export async function fetchOHLCV(
     candles = toOHLCV(raw);
   }
 
-  checkStaleness(candles, timeframe);
+  candles = checkStaleness(candles, timeframe);
   setCache(asset, timeframe, candles);
 
   return candles;

@@ -113,9 +113,9 @@ export class ScalpFVGStrategy extends BaseStrategy {
     const bullishCross   = macdPrev <= sigPrev && macdNow > sigNow;
     const bearishCross   = macdPrev >= sigPrev && macdNow < sigNow;
 
-    // Recent cross within 3 bars
+    // Recent cross within 1 bar (was 3 bars = 15 min lag on 5m — entered after move).
     const recentBullCross = (() => {
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 1; i <= 1; i++) {
         const mi = macdLine[n5 - i]; const si = signalLine[n5 - i];
         const mp = macdLine[n5 - i - 1]; const sp = signalLine[n5 - i - 1];
         if (!isNaN(mi) && !isNaN(si) && !isNaN(mp) && !isNaN(sp) && mp <= sp && mi > si) return true;
@@ -123,7 +123,7 @@ export class ScalpFVGStrategy extends BaseStrategy {
       return false;
     })();
     const recentBearCross = (() => {
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 1; i <= 1; i++) {
         const mi = macdLine[n5 - i]; const si = signalLine[n5 - i];
         const mp = macdLine[n5 - i - 1]; const sp = signalLine[n5 - i - 1];
         if (!isNaN(mi) && !isNaN(si) && !isNaN(mp) && !isNaN(sp) && mp >= sp && mi < si) return true;
@@ -131,8 +131,14 @@ export class ScalpFVGStrategy extends BaseStrategy {
       return false;
     })();
 
-    const macdBull = bullishCross || recentBullCross;
-    const macdBear = bearishCross || recentBearCross;
+    // Histogram inflection: histogram is turning (leading signal, fires before the cross).
+    const histNow  = macd5m.histogram[n5];
+    const histPrev = macd5m.histogram[n5 - 1];
+    const histInflectBull = !isNaN(histNow) && !isNaN(histPrev) && histNow < 0 && histNow > histPrev;
+    const histInflectBear = !isNaN(histNow) && !isNaN(histPrev) && histNow > 0 && histNow < histPrev;
+
+    const macdBull = bullishCross || recentBullCross || histInflectBull;
+    const macdBear = bearishCross || recentBearCross || histInflectBear;
 
     // ── Layer 3: MTF EMA 8/21 trend filter ───────────────────────────────────
     const trend5m  = cachedEmaQuickTrend(candles5m,  8, 21);

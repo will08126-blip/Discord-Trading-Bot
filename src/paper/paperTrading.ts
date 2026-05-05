@@ -14,9 +14,9 @@ import { volumeAverage } from '../indicators/indicators';
 // The user explicitly wants to stress-test the strategy. Losing the $1,000 is
 // acceptable — the goal is to surface weaknesses fast and collect data.
 
-const PAPER_RISK_PCT        = 0.05;   // 5% of balance risked per trade
+const PAPER_RISK_PCT        = 0.02;   // 2% of balance risked per trade (was 5% — too aggressive)
 const PAPER_MAX_CONCURRENT  = 4;      // max active+pending positions simultaneously
-const PAPER_MAX_LEVERAGE    = 20;     // hard leverage cap (realistic for crypto)
+const PAPER_MAX_LEVERAGE    = 10;     // hard leverage cap (was 20 — noise stopped out tight stops)
 const PAPER_SCALP_MAX_HOLD  = 240;   // max minutes to hold a scalp (4 hours)
 const PAPER_SWING_MAX_HOLD  = 4320;  // max minutes to hold a swing (72 hours)
 const PAPER_PENDING_EXPIRY  = 15;    // minutes before a pending scalp order expires
@@ -574,7 +574,8 @@ export async function enterPaperTrade(
       // ── Pending limit order (SCALP) ─────────────────────────────────────
       // Wait for price to retrace INTO the entry zone rather than chasing the
       // midpoint. This is how real FVG scalps are entered.
-      const pendingEntryPrice = signal.entryZone[0];
+      // LONG limit buys at the LOW of the zone; SHORT limit sells at the HIGH.
+      const pendingEntryPrice = isLong ? signal.entryZone[0] : signal.entryZone[1];
       const pendingExpiresAt  = new Date(Date.now() + PAPER_PENDING_EXPIRY * 60 * 1000).toISOString();
       const meta = await captureEntryMetadata(signal, currentPrice);
 
@@ -761,16 +762,22 @@ export async function checkPaperPositions(channel: TextChannel): Promise<void> {
 
         if (hitSL || hitTP || timed) {
           // ── Determine exit price ────────────────────────────────────────
-          // SL/TP hits: use the exact SL/TP level (realistic order fill).
-          // Max hold time or other closes: use poll-time price.
+          // TP hits use a limit order — model as exact fill.
+          // SL hits are market orders that blow through the level in volatile
+          // conditions, so apply slippage in the adverse direction.
+          // Max hold time / other closes: use the poll-time price.
           let exitPrice: number;
           let closeReason: PaperCloseReason;
+
+          const exitSlip = await getSlipPct(trade.asset);
 
           if (hitTP) {
             exitPrice   = trade.takeProfit;
             closeReason = 'TP hit';
           } else if (hitSL) {
-            exitPrice   = trade.stopLoss;
+            exitPrice   = isLong
+              ? trade.stopLoss * (1 - exitSlip)   // long SL fills below the level
+              : trade.stopLoss * (1 + exitSlip);  // short SL fills above the level
             closeReason = 'SL hit';
           } else {
             exitPrice   = currentPrice;
