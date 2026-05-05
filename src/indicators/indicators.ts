@@ -163,17 +163,21 @@ export function swingPoints(
   candles: OHLCV[],
   leftBars = 3,
   rightBars = 3,
-  maxPoints = 10
+  maxPoints = 10,
+  excludeCurrentCandle = true
 ): SwingPoint[] {
+  // Drop the last (open/incomplete) candle so it cannot corrupt right-side
+  // confirmation — swing highs/lows are only valid once the bar has closed.
+  const data = excludeCurrentCandle ? candles.slice(0, -1) : candles;
   const points: SwingPoint[] = [];
-  for (let i = leftBars; i < candles.length - rightBars; i++) {
-    const c = candles[i];
+  for (let i = leftBars; i < data.length - rightBars; i++) {
+    const c = data[i];
     let isHigh = true;
     let isLow = true;
     for (let j = i - leftBars; j <= i + rightBars; j++) {
       if (j === i) continue;
-      if (candles[j].high >= c.high) isHigh = false;
-      if (candles[j].low <= c.low) isLow = false;
+      if (data[j].high >= c.high) isHigh = false;
+      if (data[j].low <= c.low) isLow = false;
     }
     if (isHigh) points.push({ index: i, price: c.high, type: 'HIGH' });
     if (isLow) points.push({ index: i, price: c.low, type: 'LOW' });
@@ -439,9 +443,11 @@ export function detectFVGs(candles: OHLCV[], maxZones = 5): FVGZone[] {
       const mid     = (gapLow + gapHigh) / 2;
       const strength = (gapHigh - gapLow) / mid;
 
-      // Check if any subsequent candle filled this zone
+      // Check if any subsequent candle filled this zone.
+      // Stop before the last candle (the current open bar) — an in-progress
+      // candle overlapping the gap should not prematurely mark it as filled.
       let filled = false;
-      for (let j = i + 1; j < n; j++) {
+      for (let j = i + 1; j < n - 1; j++) {
         if (candles[j].low <= gapHigh && candles[j].high >= gapLow) {
           filled = true;
           break;
@@ -458,7 +464,7 @@ export function detectFVGs(candles: OHLCV[], maxZones = 5): FVGZone[] {
       const strength = (gapHigh - gapLow) / mid;
 
       let filled = false;
-      for (let j = i + 1; j < n; j++) {
+      for (let j = i + 1; j < n - 1; j++) {
         if (candles[j].low <= gapHigh && candles[j].high >= gapLow) {
           filled = true;
           break;
