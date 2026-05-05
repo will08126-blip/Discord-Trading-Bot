@@ -1,17 +1,17 @@
 /**
- * Fixed asset list — no network fetching required.
+ * Adaptive asset validation — verifies symbols are tradeable on startup and
+ * prunes dead/unavailable symbols from the scan list so no cycles are wasted
+ * fetching OHLCV for delisted or inactive pairs.
  *
- * Crypto pairs use Gate.io (CCXT) for OHLCV data.
+ * Crypto pairs use CCXT (configured exchange) for OHLCV data.
  * Traditional assets (XAU, XAG, QQQ, SPY) use Yahoo Finance.
- *
- * If any crypto pair is unavailable on Gate.io the scan cycle skips it
- * gracefully (Promise.allSettled in marketData.ts).
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const ccxt = require('ccxt');
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { isYahooAsset, fetchYahooOHLCV } from './yahooFinanceData';
 
 export const CRYPTO_ASSETS = [
   'BTC/USDT',
@@ -39,7 +39,21 @@ export const ALL_ASSETS: string[] = [
   ...TRADITIONAL_ASSETS,
 ];
 
-/** Loads the fixed asset list into config.trading.assets. Called once on startup. */
+/**
+ * Module-level cache of verified assets after startup validation.
+ * Set by verifyAssets() — used by getVerifiedAssets() for external consumers.
+ */
+let _verifiedAssets: string[] | null = null;
+
+/**
+ * Returns the verified asset list (set after startup verification completes).
+ * Falls back to ALL_ASSETS if verification hasn't run yet (defensive).
+ */
+export function getVerifiedAssets(): string[] {
+  return _verifiedAssets ?? [...ALL_ASSETS];
+}
+
+/** Loads the full asset list into config.trading.assets. Called once on startup. */
 export function initializeTopCryptos(): void {
   config.trading.assets.length = 0;
   for (const a of ALL_ASSETS) config.trading.assets.push(a);
@@ -48,10 +62,12 @@ export function initializeTopCryptos(): void {
 
 /** No-op kept for compatibility — asset list is static, nothing to refresh. */
 export function refreshTopCryptos(): void {
+  // If verification already pruned dead assets, re-run to catch newly listed pairs.
+  // Currently a no-op — future enhancement could periodically re-verify.
   logger.debug('topCryptos: static list — no refresh needed');
 }
 
-/** Returns the full asset list. */
+/** Returns the full crypto asset list. */
 export function getTopCryptoPairs(): string[] {
   return [...CRYPTO_ASSETS];
 }
@@ -62,16 +78,23 @@ export interface AssetVerificationResult {
 }
 
 /**
- * Verifies all hardcoded crypto assets are fetchable on the configured exchange.
- * Runs at startup — non-blocking. Logs a clear OK/WARN summary so you can spot
- * unavailable tickers immediately in Render logs without digging through scan cycles.
+ * Verifies ALL assets (crypto + traditional) are reachable, then prunes
+ * config.trading.assets to only verified symbols and caches them in
+ * _verifiedAssets. Subsequent scan cycles never waste API calls on dead pairs.
  *
- * Traditional assets (XAU, XAG, QQQ, SPY) are verified via Yahoo Finance implicitly
- * at scan time; this function only checks Gate.io crypto pairs.
+ * Crypto pairs are checked via CCXT (configured exchange).
+ * Traditional assets checked via Yahoo Finance.
+ *
+ * If all assets of a type fail (e.g. exchange is down), the original list is
+ * preserved rather than silently dropping every symbol.
  */
 export async function verifyAssets(): Promise<AssetVerificationResult> {
-  const exchangeId: string = config.engine.exchangeId ?? 'gate';
-  logger.info(`[assetVerify] Checking ${CRYPTO_ASSETS.length} crypto assets on ${exchangeId}…`);
+  const exchangeId: string = config.engine.exchangeId ?? 'binance';
+  logger.info(`[assetVerify] Checking ${CRYPTO_ASSETS.length} crypto + ${TRADITIONAL_ASSETS.length} traditional assets…`);
+
+  // ── Crypto verification ─────────────────────────────────────────────
+  const cryptoOk: string[] = [];
+  const cryptoFailed: string[] = [];
 
   let exchange: any;
   try {
@@ -86,13 +109,40 @@ export async function verifyAssets(): Promise<AssetVerificationResult> {
     exchange = new ccxt[exchangeId](options);
   } catch (err) {
     logger.warn(`[assetVerify] Could not instantiate exchange "${exchangeId}": ${err}`);
-    return { ok: [], failed: [...CRYPTO_ASSETS] };
+    // Preserve all crypto assets if exchange itself is broken
+    cryptoOk.push(...CRYPTO_ASSETS);
   }
 
-  const results = await Promise.allSettled(
-    CRYPTO_ASSETS.map(async (symbol) => {
-      // Fetch just 3 candles on the 1h timeframe — fast and lightweight
-      const ohlcv = await exchange.fetchOHLCV(symbol, '1h', undefined, 3);
+  if (exchange) {
+    const results = await Promise.allSettled(
+      CRYPTO_ASSETS.map(async (symbol) => {
+        const ohlcv = await exchange.fetchOHLCV(symbol, '1h', undefined, 3);
+        if (!Array.isArray(ohlcv) || ohlcv.length === 0) {
+          throw new Error(`Empty OHLCV response for ${symbol}`);
+        }
+        return symbol;
+      })
+    );
+
+    results.forEach((r, i) => {
+      const symbol = CRYPTO_ASSETS[i];
+      if (r.status === 'fulfilled') {
+        cryptoOk.push(symbol);
+      } else {
+        cryptoFailed.push(symbol);
+        logger.warn(`[assetVerify] ⚠️  ${symbol} — NOT available on ${exchangeId}: ${(r as PromiseRejectedResult).reason}`);
+      }
+    });
+  }
+
+  // ── Traditional asset verification (Yahoo Finance) ───────────────────
+  const tradOk: string[] = [];
+  const tradFailed: string[] = [];
+
+  const tradResults = await Promise.allSettled(
+    TRADITIONAL_ASSETS.map(async (symbol) => {
+      // Fetch 3 daily candles — fast and lightweight
+      const ohlcv = await fetchYahooOHLCV(symbol as any, '1d', 3);
       if (!Array.isArray(ohlcv) || ohlcv.length === 0) {
         throw new Error(`Empty OHLCV response for ${symbol}`);
       }
@@ -100,26 +150,42 @@ export async function verifyAssets(): Promise<AssetVerificationResult> {
     })
   );
 
-  const ok: string[]     = [];
-  const failed: string[] = [];
-
-  results.forEach((r, i) => {
-    const symbol = CRYPTO_ASSETS[i];
+  tradResults.forEach((r, i) => {
+    const symbol = TRADITIONAL_ASSETS[i];
     if (r.status === 'fulfilled') {
-      ok.push(symbol);
+      tradOk.push(symbol);
     } else {
-      failed.push(symbol);
-      logger.warn(`[assetVerify] ⚠️  ${symbol} — NOT available on ${exchangeId}: ${(r as PromiseRejectedResult).reason}`);
+      tradFailed.push(symbol);
+      logger.warn(`[assetVerify] ⚠️  ${symbol} — NOT available via Yahoo Finance: ${(r as PromiseRejectedResult).reason}`);
     }
   });
 
-  if (failed.length === 0) {
-    logger.info(`[assetVerify] ✅ All ${ok.length} crypto assets confirmed on ${exchangeId}`);
+  const ok = [...cryptoOk, ...tradOk];
+  const failed = [...cryptoFailed, ...tradFailed];
+
+  // ── Prune config.trading.assets to only verified symbols ────────────
+  // If ALL symbols failed (exchange outage), keep the original list rather than
+  // scanning nothing — the scan cycle will handle individual failures gracefully.
+  if (ok.length > 0) {
+    const removed = ALL_ASSETS.filter((a) => !ok.includes(a));
+    config.trading.assets.length = 0;
+    for (const a of ok) config.trading.assets.push(a);
+    _verifiedAssets = [...ok];
+
+    if (removed.length > 0) {
+      logger.info(
+        `[assetVerify] Pruned ${removed.length} dead assets: ${removed.join(', ')} — ` +
+        `scanning ${ok.length}/${ALL_ASSETS.length} assets. Run \`/status\` to see active list.`
+      );
+    } else {
+      logger.info(`[assetVerify] ✅ All ${ok.length} assets verified — no pruning needed`);
+    }
   } else {
     logger.warn(
-      `[assetVerify] ${ok.length} OK, ${failed.length} FAILED: ${failed.join(', ')} — ` +
-      `these symbols will be skipped silently each scan cycle`
+      `[assetVerify] All assets failed verification (exchange may be down) — ` +
+      `preserving original list; scan cycle will skip dead assets individually`
     );
+    _verifiedAssets = [...ALL_ASSETS];
   }
 
   return { ok, failed };

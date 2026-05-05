@@ -2,7 +2,7 @@ import { Events } from 'discord.js';
 import { discordClient } from './bot/client';
 import { onReady } from './bot/events/ready';
 import { onInteractionCreate } from './bot/events/interactionCreate';
-import { startScheduler, runScanCycle } from './engine';
+import { startScheduler } from './engine';
 import { loadPositions } from './signals/signalManager';
 import { config } from './config';
 import { logger } from './utils/logger';
@@ -40,12 +40,8 @@ async function main() {
   discordClient.once(Events.ClientReady, async (client) => {
     await onReady(client);
     startScheduler();
-
-    // Run one scan immediately on startup so you don't wait 5 minutes
-    logger.info('Running initial scan...');
-    setTimeout(() => {
-      runScanCycle().catch((err) => logger.error('Initial scan error:', err));
-    }, 3000); // small delay to let Discord settle
+    // startScheduler() handles asset verification and runs the initial scan
+    // automatically once verification completes (or falls back).
   });
 
   discordClient.on(Events.InteractionCreate, onInteractionCreate);
