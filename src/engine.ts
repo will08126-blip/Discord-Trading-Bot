@@ -617,11 +617,6 @@ export function startScheduler() {
   // Initialise hardcoded asset list (synchronous — no network call)
   initializeTopCryptos();
 
-  // Verify all hardcoded crypto assets are reachable on the exchange.
-  // Non-blocking — runs async in background so startup is not delayed.
-  // Results are logged; unavailable symbols are skipped gracefully at scan time.
-  verifyAssets().catch((err) => logger.warn('[assetVerify] Verification error:', err));
-
   // Reset stale scalp_params.json if it has old aggressive thresholds, then ensure file exists
   resetStaleScalpParams();
   ensureScalpParamsExist();
@@ -629,19 +624,59 @@ export function startScheduler() {
   const interval = config.engine.scanIntervalMinutes;
   logger.info(`Starting scan scheduler: every ${interval} min`);
 
-  // Main scan: every N minutes
-  // Cron minutes field only accepts 0-59; use setInterval for intervals >= 60
-  if (interval < 60) {
-    cron.schedule(`*/${interval} * * * *`, () => {
-      runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
+  // ── Asset verification (async, completes before first scan) ─────────
+  // Verifies all symbols are tradeable on the exchange, prunes dead ones
+  // from config.trading.assets, then starts the periodic scan cycle.
+  verifyAssets()
+    .then((result) => {
+      if (result.failed.length > 0) {
+        logger.info(
+          `[scheduler] Asset verification complete — ${result.ok.length} OK, ${result.failed.length} pruned. ` +
+          `Starting scan cycle with ${config.trading.assets.length} assets.`
+        );
+      } else {
+        logger.info(`[scheduler] Asset verification complete — all ${result.ok.length} assets OK. Starting scan cycle.`);
+      }
+
+      // Main scan: every N minutes
+      if (interval < 60) {
+        cron.schedule(`*/${interval} * * * *`, () => {
+          runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
+        });
+      } else {
+        const intervalMs = interval * 60 * 1000;
+        setInterval(() => {
+          runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
+        }, intervalMs);
+        logger.info(`Using setInterval for ${interval}-minute scan cadence`);
+      }
+
+      // Run one scan immediately after verification
+      logger.info('Running initial scan…');
+      setTimeout(() => {
+        runScanCycle().catch((err) => logger.error('Initial scan error:', err));
+      }, 3000);
+    })
+    .catch((err) => {
+      logger.warn(`[scheduler] Asset verification failed (${err}) — starting scan with full asset list`);
+
+      // Fallback: start scheduling even if verification failed
+      if (interval < 60) {
+        cron.schedule(`*/${interval} * * * *`, () => {
+          runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
+        });
+      } else {
+        const intervalMs = interval * 60 * 1000;
+        setInterval(() => {
+          runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
+        }, intervalMs);
+      }
+
+      setTimeout(() => {
+        runScanCycle().catch((err) => logger.error('Initial scan error:', err));
+      }, 3000);
     });
-  } else {
-    const intervalMs = interval * 60 * 1000;
-    setInterval(() => {
-      runScanCycle().catch((err) => logger.error('Unhandled scan error:', err));
-    }, intervalMs);
-    logger.info(`Using setInterval for ${interval}-minute scan cadence`);
-  }
+
 
   // Weekly scalp analysis: every Sunday at midnight UTC — posts to #paper-trading
   cron.schedule('0 0 * * 0', () => {
