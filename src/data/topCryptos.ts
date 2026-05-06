@@ -21,10 +21,8 @@ export const CRYPTO_ASSETS = [
   'PEPE/USDT',
   'BONK/USDT',
   'HYPE/USDT',
-  'SHIB/USDT',
   'AERO/USDT',
   'TAO/USDT',
-  'DOGE/USDT',
 ] as const;
 
 export const TRADITIONAL_ASSETS = [
